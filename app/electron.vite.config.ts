@@ -1,6 +1,6 @@
-import { defineConfig } from 'electron-vite';
-import react from '@vitejs/plugin-react';
-import { resolve } from 'node:path';
+import { defineConfig } from 'electron-vite'
+import react from '@vitejs/plugin-react'
+import { resolve } from 'node:path'
 
 export default defineConfig({
   main: {
@@ -21,6 +21,14 @@ export default defineConfig({
   preload: {
     build: {
       outDir: 'dist/preload',
+      rollupOptions: {
+        output: {
+          format: 'cjs',
+          entryFileNames: '[name].cjs',
+          chunkFileNames: '[name].cjs',
+          assetFileNames: '[name][extname]',
+        },
+      },
     },
   },
   renderer: {
@@ -34,4 +42,4 @@ export default defineConfig({
       outDir: 'dist/renderer',
     },
   },
-});
+})
