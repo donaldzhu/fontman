@@ -1,7 +1,7 @@
-import CoreText
-import Foundation
 import AppKit
 import CoreServices
+import CoreText
+import Foundation
 
 // MARK: - Data Models
 
@@ -132,9 +132,11 @@ final class SourceWatcher {
             copyDescription: nil
         )
 
-        let callback: FSEventStreamCallback = { _, clientCallBackInfo, numEvents, eventPathsPointer, eventFlagsPointer, _ in
+        let callback: FSEventStreamCallback = {
+            _, clientCallBackInfo, numEvents, eventPathsPointer, eventFlagsPointer, _ in
             guard let clientCallBackInfo else { return }
-            let watcher = Unmanaged<SourceWatcher>.fromOpaque(clientCallBackInfo).takeUnretainedValue()
+            let watcher = Unmanaged<SourceWatcher>.fromOpaque(clientCallBackInfo)
+                .takeUnretainedValue()
 
             // Cast eventPathsPointer to NSArray -> [String]
             let paths = unsafeBitCast(eventPathsPointer, to: NSArray.self) as? [String] ?? []
@@ -148,7 +150,8 @@ final class SourceWatcher {
 
             for index in 0..<paths.count {
                 let flagValue = flags.count > index ? flags[index] : 0
-                changes.append(SourceChange(path: paths[index], flags: watcher.flagStrings(flagValue)))
+                changes.append(
+                    SourceChange(path: paths[index], flags: watcher.flagStrings(flagValue)))
 
                 // Check for removal
                 if (flagValue & FSEventStreamEventFlags(kFSEventStreamEventFlagItemRemoved)) != 0 {
@@ -167,7 +170,8 @@ final class SourceWatcher {
             paths as CFArray,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
             0.2,
-            FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagUseCFTypes)
+            FSEventStreamCreateFlags(
+                kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagUseCFTypes)
         )
 
         guard let stream else { return }
@@ -189,14 +193,30 @@ final class SourceWatcher {
 
     private func flagStrings(_ flags: FSEventStreamEventFlags) -> [String] {
         var values: [String] = []
-        if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemCreated) != 0 { values.append("created") }
-        if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemRemoved) != 0 { values.append("removed") }
-        if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemModified) != 0 { values.append("modified") }
-        if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemRenamed) != 0 { values.append("renamed") }
-        if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemInodeMetaMod) != 0 { values.append("inode-meta") }
-        if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemFinderInfoMod) != 0 { values.append("finder-info") }
-        if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemChangeOwner) != 0 { values.append("owner") }
-        if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemXattrMod) != 0 { values.append("xattr") }
+        if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemCreated) != 0 {
+            values.append("created")
+        }
+        if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemRemoved) != 0 {
+            values.append("removed")
+        }
+        if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemModified) != 0 {
+            values.append("modified")
+        }
+        if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemRenamed) != 0 {
+            values.append("renamed")
+        }
+        if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemInodeMetaMod) != 0 {
+            values.append("inode-meta")
+        }
+        if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemFinderInfoMod) != 0 {
+            values.append("finder-info")
+        }
+        if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemChangeOwner) != 0 {
+            values.append("owner")
+        }
+        if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemXattrMod) != 0 {
+            values.append("xattr")
+        }
         return values
     }
 }
@@ -247,7 +267,9 @@ final class JsonRpcServer {
             case "watchSources":
                 let paths = request.params?.paths ?? []
                 watcher.update(paths: paths)
-                respond(result: WatchSourcesResult(watching: !paths.isEmpty, paths: paths), id: request.id)
+                respond(
+                    result: WatchSourcesResult(watching: !paths.isEmpty, paths: paths),
+                    id: request.id)
             case "unregisterFont":
                 guard let path = request.params?.path else {
                     respondError(id: request.id, code: -32602, message: "Missing path param")
@@ -292,7 +314,8 @@ final class JsonRpcServer {
 
     private func respondError(id: JsonRpcId, code: Int, message: String) {
         do {
-            let response = JsonRpcErrorResponse(id: id, error: JsonRpcErrorDetail(code: code, message: message))
+            let response = JsonRpcErrorResponse(
+                id: id, error: JsonRpcErrorDetail(code: code, message: message))
             let payload = try encoder.encode(response)
             if let line = String(data: payload, encoding: .utf8) {
                 print(line)
@@ -305,14 +328,17 @@ final class JsonRpcServer {
 
     private func respondParseError() {
         do {
-            let response = JsonRpcErrorResponse(id: nil, error: JsonRpcErrorDetail(code: -32700, message: "Parse error"))
+            let response = JsonRpcErrorResponse(
+                id: nil, error: JsonRpcErrorDetail(code: -32700, message: "Parse error"))
             let payload = try encoder.encode(response)
             if let line = String(data: payload, encoding: .utf8) {
                 print(line)
                 fflush(stdout)
             }
         } catch {
-            print("{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32700,\"message\":\"Parse error\"}}")
+            print(
+                "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32700,\"message\":\"Parse error\"}}"
+            )
             fflush(stdout)
         }
     }
@@ -331,27 +357,38 @@ final class JsonRpcServer {
 
     private func scanFile(path: String) -> ScanFileResult {
         let url = URL(fileURLWithPath: path)
-        guard let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor] else {
+        guard
+            let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL)
+                as? [CTFontDescriptor]
+        else {
             return ScanFileResult(path: path, faces: [])
         }
         var faces: [ScanFileFace] = []
         for (index, descriptor) in descriptors.enumerated() {
             // 1. Extract Name Attributes
-            let familyName = CTFontDescriptorCopyAttribute(descriptor, kCTFontFamilyNameAttribute) as? String ?? "Unknown"
+            let familyName =
+                CTFontDescriptorCopyAttribute(descriptor, kCTFontFamilyNameAttribute) as? String
+                ?? "Unknown"
 
             // Using literal strings "NSFullName" and "NSPostScriptName" to avoid Swift compiler issues
-            let fullName = CTFontDescriptorCopyAttribute(descriptor, "NSFullName" as CFString) as? String
+            let fullName =
+                CTFontDescriptorCopyAttribute(descriptor, "NSFullName" as CFString) as? String
                 ?? CTFontDescriptorCopyAttribute(descriptor, kCTFontDisplayNameAttribute) as? String
                 ?? familyName
 
-            let postScriptName = CTFontDescriptorCopyAttribute(descriptor, "NSPostScriptName" as CFString) as? String
+            let postScriptName =
+                CTFontDescriptorCopyAttribute(descriptor, "NSPostScriptName" as CFString) as? String
                 ?? CTFontDescriptorCopyAttribute(descriptor, kCTFontNameAttribute) as? String
                 ?? fullName
 
-            let styleName = CTFontDescriptorCopyAttribute(descriptor, kCTFontStyleNameAttribute) as? String ?? "Regular"
+            let styleName =
+                CTFontDescriptorCopyAttribute(descriptor, kCTFontStyleNameAttribute) as? String
+                ?? "Regular"
 
             // 2. Extract Traits
-            let traits = CTFontDescriptorCopyAttribute(descriptor, kCTFontTraitsAttribute) as? [CFString: Any]
+            let traits =
+                CTFontDescriptorCopyAttribute(descriptor, kCTFontTraitsAttribute)
+                as? [CFString: Any]
             let weight = traits?[kCTFontWeightTrait] as? Double
             let width = traits?[kCTFontWidthTrait] as? Double
             let slant = traits?[kCTFontSlantTrait] as? Double
@@ -399,8 +436,9 @@ final class JsonRpcServer {
 
     private func isFontRegistered(path: String) -> IsFontRegisteredResult {
         let url = URL(fileURLWithPath: path)
-        let registered = CTFontManagerIsFontRegisteredForURL(url as CFURL, .user)
-        return IsFontRegisteredResult(registered: registered)
+        // FIX: Use CTFontManagerGetScopeForURL to check status
+        let scope = CTFontManagerGetScopeForURL(url as CFURL)
+        return IsFontRegisteredResult(registered: scope != .none)
     }
 }
 
