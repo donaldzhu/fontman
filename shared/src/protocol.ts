@@ -153,4 +153,27 @@ export type LibraryFamily = {
   id: number;
   familyName: string;
   faces: LibraryFace[];
+  facetValueIds: number[];
+};
+
+export type FacetColumnType = 'single' | 'multi' | 'boolean';
+
+export type FacetValue = {
+  id: number;
+  columnId: number;
+  valueKey: string;
+  displayName: string;
+};
+
+export type FacetColumn = {
+  id: number;
+  key: string;
+  displayName: string;
+  type: FacetColumnType;
+  values: FacetValue[];
+};
+
+export type FamilyFacetValue = {
+  familyId: number;
+  valueId: number;
 };
