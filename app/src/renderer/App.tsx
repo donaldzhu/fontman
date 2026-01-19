@@ -27,6 +27,14 @@ declare global {
       listFamilies: () => Promise<LibraryFamily[]>;
       listFacets: () => Promise<FacetColumn[]>;
       getFaceFeatures: (path: string, index: number) => Promise<FaceFeaturesResult>;
+      renderPreview: (
+        path: string,
+        index: number,
+        text: string,
+        size: number,
+        features: string[],
+        variations: Record<string, number>,
+      ) => Promise<{ ok: boolean; pngBase64?: string }>;
       setFamilyFacetValues: (familyId: number, valueIds: number[]) => Promise<{ ok: boolean }>;
       setFaceActivated: (faceId: number, activated: boolean) => Promise<{ activated: boolean }>;
     };
@@ -70,6 +78,9 @@ const App = () => {
   const [openTypePanelOpen, setOpenTypePanelOpen] = useState(false);
   const [faceFeatures, setFaceFeatures] = useState<Record<number, FaceFeaturesState>>({});
   const [faceSettings, setFaceSettings] = useState<Record<number, FaceSettingsState>>({});
+  const [previewRenders, setPreviewRenders] = useState<
+    Record<number, { key: string; dataUrl: string }>
+  >({});
   const [facetFilters, setFacetFilters] = useState<
     Record<
       number,
@@ -228,7 +239,7 @@ const App = () => {
     if (!selectedFace) {
       return;
     }
-    ensureFaceFeatures(selectedFace);
+    void ensureFaceFeatures(selectedFace);
   }, [selectedFace]);
 
   const handleToggleBooleanFacet = async (family: LibraryFamily, column: FacetColumn) => {
@@ -270,14 +281,15 @@ const App = () => {
     return entries.map(([tag, value]) => `"${tag}" ${value}`).join(', ');
   };
 
-  const ensureFaceFeatures = async (face: LibraryFace) => {
+  const ensureFaceFeatures = async (face: LibraryFace): Promise<FaceFeaturesState> => {
     if (faceFeatures[face.id]) {
-      return;
+      return faceFeatures[face.id];
     }
     const result = await window.fontman.getFaceFeatures(face.filePath, face.indexInCollection);
+    const nextFeatures = { features: result.features, axes: result.axes };
     setFaceFeatures((current) => ({
       ...current,
-      [face.id]: { features: result.features, axes: result.axes },
+      [face.id]: nextFeatures,
     }));
     setFaceSettings((current) => {
       if (current[face.id]) {
@@ -299,7 +311,92 @@ const App = () => {
         },
       };
     });
+    return nextFeatures;
   };
+
+  const isCollectionFace = (face: LibraryFace) => {
+    const extension = face.filePath.split('.').pop()?.toLowerCase();
+    return extension === 'ttc' || extension === 'otc';
+  };
+
+  const getEnabledFeatureTags = (faceId: number, featureData?: FaceFeaturesState) => {
+    const settings = faceSettings[faceId];
+    if (settings) {
+      return Object.entries(settings.featureStates)
+        .filter(([, enabled]) => enabled)
+        .map(([tag]) => tag)
+        .sort();
+    }
+    const fallback = featureData?.features ?? [];
+    return fallback.filter((feature) => feature.enabledByDefault).map((feature) => feature.tag).sort();
+  };
+
+  const getAxisValues = (faceId: number, featureData?: FaceFeaturesState) => {
+    const settings = faceSettings[faceId];
+    if (settings) {
+      return settings.axisValues;
+    }
+    const axisDefaults: Record<string, number> = {};
+    for (const axis of featureData?.axes ?? []) {
+      axisDefaults[axis.tag] = axis.defaultValue;
+    }
+    return axisDefaults;
+  };
+
+  const buildPreviewKey = (faceId: number, featureData?: FaceFeaturesState) => {
+    const enabledFeatures = getEnabledFeatureTags(faceId, featureData);
+    const axisValues = getAxisValues(faceId, featureData);
+    const axisEntries = Object.entries(axisValues)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([tag, value]) => `${tag}:${value}`)
+      .join(',');
+    return `${faceId}|${fontSize}|${sampleText}|${enabledFeatures.join(',')}|${axisEntries}`;
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      const faces = filteredFamilies.flatMap((family) => family.faces);
+      for (const face of faces) {
+        if (!isCollectionFace(face) || !face.previewSupported) {
+          continue;
+        }
+        const featureData = await ensureFaceFeatures(face);
+        if (cancelled) {
+          return;
+        }
+        const enabledFeatures = getEnabledFeatureTags(face.id, featureData);
+        const axisValues = getAxisValues(face.id, featureData);
+        const previewKey = buildPreviewKey(face.id, featureData);
+        const cached = previewRenders[face.id];
+        if (cached?.key === previewKey) {
+          continue;
+        }
+        const result = await window.fontman.renderPreview(
+          face.filePath,
+          face.indexInCollection,
+          sampleText,
+          fontSize,
+          enabledFeatures,
+          axisValues,
+        );
+        if (cancelled) {
+          return;
+        }
+        if (result.ok && result.pngBase64) {
+          const dataUrl = `data:image/png;base64,${result.pngBase64}`;
+          setPreviewRenders((current) => ({
+            ...current,
+            [face.id]: { key: previewKey, dataUrl },
+          }));
+        }
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [filteredFamilies, sampleText, fontSize, faceSettings, faceFeatures, previewRenders]);
 
   const filteredFamilies = useMemo(() => {
     const normalizedSearch = searchText.trim().toLowerCase();
@@ -487,7 +584,7 @@ const App = () => {
                         onClick={(event) => {
                           event.stopPropagation();
                           setSelectedFaceId(face.id);
-                          ensureFaceFeatures(face);
+                          void ensureFaceFeatures(face);
                         }}
                       >
                         {selectedFace?.id === face.id ? 'Selected' : 'Select'}
@@ -729,7 +826,7 @@ const App = () => {
                         event.stopPropagation();
                         setSelectedFamilyId(family.id);
                         setSelectedFaceId(face.id);
-                        ensureFaceFeatures(face);
+                        void ensureFaceFeatures(face);
                       }}
                     >
                       <p className="face-tile__name">{face.fullName}</p>
@@ -745,17 +842,31 @@ const App = () => {
                       >
                         {face.activated ? 'Deactivate' : 'Activate'}
                       </button>
-                      <div
-                        className="face-tile__preview"
-                        style={{
-                          fontFamily: `face_${face.id}`,
-                          fontSize,
-                          fontFeatureSettings: buildFeatureSettings(face.id),
-                          fontVariationSettings: buildVariationSettings(face.id),
-                        }}
-                      >
-                        {sampleText}
-                      </div>
+                      {isCollectionFace(face) && face.previewSupported ? (
+                        <div className="face-tile__preview face-tile__preview--raster">
+                          {previewRenders[face.id]?.key === buildPreviewKey(face.id, faceFeatures[face.id]) ? (
+                            <img
+                              src={previewRenders[face.id]?.dataUrl}
+                              alt={`${face.fullName} preview`}
+                              className="face-tile__preview-image"
+                            />
+                          ) : (
+                            <span className="face-tile__preview-placeholder">Rendering preview…</span>
+                          )}
+                        </div>
+                      ) : (
+                        <div
+                          className="face-tile__preview"
+                          style={{
+                            fontFamily: `face_${face.id}`,
+                            fontSize,
+                            fontFeatureSettings: buildFeatureSettings(face.id),
+                            fontVariationSettings: buildVariationSettings(face.id),
+                          }}
+                        >
+                          {sampleText}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>

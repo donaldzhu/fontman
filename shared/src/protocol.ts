@@ -110,6 +110,20 @@ export type FaceFeaturesResult = {
   axes: FontVariationAxis[];
 };
 
+export type RenderPreviewParams = {
+  path: string;
+  index: number;
+  text: string;
+  size: number;
+  features: string[];
+  variations: Record<string, number>;
+};
+
+export type RenderPreviewResult = {
+  ok: boolean;
+  pngBase64?: string;
+};
+
 export type WatchSourcesParams = {
   paths: string[];
 };
@@ -150,7 +164,8 @@ export type FontServiceMethods =
   | 'registerFont'
   | 'unregisterFont'
   | 'isFontRegistered'
-  | 'getFeaturesForFace';
+  | 'getFeaturesForFace'
+  | 'renderPreview';
 
 export type LibrarySource = {
   id: number;
