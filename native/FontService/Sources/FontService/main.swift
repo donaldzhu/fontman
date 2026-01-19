@@ -154,27 +154,11 @@ final class JsonRpcServer {
         }
         var faces: [ScanFileFace] = []
         for (index, descriptor) in descriptors.enumerated() {
-            let familyName = CTFontDescriptorCopyAttribute(descriptor, kCTFontFamilyNameAttribute) as? String ?? "Unknown"
-            let fullName = CTFontDescriptorCopyAttribute(descriptor, kCTFontFullNameAttribute) as? String
-                ?? CTFontDescriptorCopyAttribute(descriptor, kCTFontDisplayNameAttribute) as? String
-                ?? familyName
-            let postScriptName = CTFontDescriptorCopyAttribute(descriptor, kCTFontPostScriptNameAttribute) as? String
-                ?? CTFontDescriptorCopyAttribute(descriptor, kCTFontNameAttribute) as? String
-                ?? fullName
-            let styleName = CTFontDescriptorCopyAttribute(descriptor, kCTFontStyleNameAttribute) as? String ?? "Regular"
-
-        // Obtain font descriptors from the file URL
-        guard let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor] else {
-            return ScanFileResult(path: path, faces: [])
-        }
-
-        var faces: [ScanFileFace] = []
-
-        for (index, descriptor) in descriptors.enumerated() {
             // 1. Extract Name Attributes
-            // Using string literals for FullName and PostScriptName to avoid "missing in scope" errors
             let familyName = CTFontDescriptorCopyAttribute(descriptor, kCTFontFamilyNameAttribute) as? String ?? "Unknown"
 
+            // Using literal strings "NSFullName" and "NSPostScriptName" to avoid Swift compiler issues
+            // with kCTFontFullNameAttribute / kCTFontPostScriptNameAttribute
             let fullName = CTFontDescriptorCopyAttribute(descriptor, "NSFullName" as CFString) as? String
                 ?? CTFontDescriptorCopyAttribute(descriptor, kCTFontDisplayNameAttribute) as? String
                 ?? familyName
@@ -185,21 +169,18 @@ final class JsonRpcServer {
 
             let styleName = CTFontDescriptorCopyAttribute(descriptor, kCTFontStyleNameAttribute) as? String ?? "Regular"
 
-            // 2. Extract Traits (Weight, Width, Slant, Symbolic)
+            // 2. Extract Traits
             let traits = CTFontDescriptorCopyAttribute(descriptor, kCTFontTraitsAttribute) as? [CFString: Any]
             let weight = traits?[kCTFontWeightTrait] as? Double
             let width = traits?[kCTFontWidthTrait] as? Double
             let slant = traits?[kCTFontSlantTrait] as? Double
-            let symbolic = traits?[kCTFontSymbolicTrait] as? NSNumber
-            let isItalic = (symbolic?.intValue ?? 0) & CTFontSymbolicTraits.italicTrait.rawValue != 0
 
-            // 3. Handle Bitwise logic for Italic check
-            // We cast to UInt32 to match the type of CTFontSymbolicTraits.italicTrait.rawValue
+            // 3. Handle Bitwise logic (fixing the Int vs UInt32 error)
             let symbolic = traits?[kCTFontSymbolicTrait] as? NSNumber
             let symbolicValue = UInt32(symbolic?.uint32Value ?? 0)
             let isItalic = (symbolicValue & CTFontSymbolicTraits.italicTrait.rawValue) != 0
 
-            // 4. Check for Variable Font axes
+            // 4. Variable Fonts
             let variation = CTFontDescriptorCopyAttribute(descriptor, kCTFontVariationAttribute)
             let isVariable = variation != nil
 
@@ -218,9 +199,9 @@ final class JsonRpcServer {
                 )
             )
         }
-
         return ScanFileResult(path: path, faces: faces)
     }
-}
+} // End of Class
 
+// Start the server outside the class
 JsonRpcServer().start()
