@@ -11,6 +11,9 @@ import type {
   ScanFileResult,
   LibrarySource,
   LibraryFamily,
+  HelperEvent,
+  WatchSourcesResult,
+  UnregisterFontResult,
 } from '@fontman/shared/src/protocol'
 import { LibraryStore } from './library'
 
@@ -21,6 +24,12 @@ let helperProcess: ReturnType<typeof spawn> | null = null
 let helperReady = false
 let helperBuffer = ''
 let libraryStore: LibraryStore | null = null
+const helperPending = new Map<
+  string,
+  { resolve: (value: unknown) => void; reject: (error: Error) => void }
+>()
+const pendingPaths = new Set<string>()
+let processingPaths = false
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -82,6 +91,15 @@ const startHelper = async () => {
   helperProcess = spawn(helperPath, [], { stdio: ['pipe', 'pipe', 'pipe'] })
   helperProcess.stdout?.on('data', (chunk) => {
     helperBuffer += chunk.toString()
+    while (helperBuffer.includes('\n')) {
+      const newlineIndex = helperBuffer.indexOf('\n')
+      const line = helperBuffer.slice(0, newlineIndex).trim()
+      helperBuffer = helperBuffer.slice(newlineIndex + 1)
+      if (!line) {
+        continue
+      }
+      handleHelperLine(line)
+    }
   })
   helperProcess.stderr?.on('data', (chunk) => {
     console.error('[FontService]', chunk.toString())
@@ -89,6 +107,10 @@ const startHelper = async () => {
   helperProcess.on('exit', () => {
     helperProcess = null
     helperReady = false
+    for (const pending of helperPending.values()) {
+      pending.reject(new Error('FontService helper exited'))
+    }
+    helperPending.clear()
   })
   helperReady = true
 }
@@ -126,26 +148,142 @@ const sendHelperRequest = async <TResult>(request: JsonRpcRequest): Promise<TRes
   }
   helperProcess.stdin.write(`${JSON.stringify(request)}\n`)
   return new Promise((resolve, reject) => {
-    const interval = setInterval(() => {
-      const newlineIndex = helperBuffer.indexOf('\n')
-      if (newlineIndex === -1) {
-        return
-      }
-      const line = helperBuffer.slice(0, newlineIndex)
-      helperBuffer = helperBuffer.slice(newlineIndex + 1)
-      clearInterval(interval)
-      try {
-        const response = JSON.parse(line) as JsonRpcResponse<TResult>
-        if ('error' in response) {
-          reject(new Error(response.error.message))
-        } else {
-          resolve(response.result)
-        }
-      } catch (error) {
-        reject(error)
-      }
-    }, 50)
+    helperPending.set(String(request.id), {
+      resolve: resolve as (value: unknown) => void,
+      reject,
+    })
   })
+}
+
+const handleHelperLine = (line: string) => {
+  let payload: HelperEvent | JsonRpcResponse
+  try {
+    payload = JSON.parse(line)
+  } catch (error) {
+    console.error('Failed to parse helper payload', error)
+    return
+  }
+  if ('event' in payload) {
+    handleHelperEvent(payload)
+    return
+  }
+  if (!('id' in payload)) {
+    return
+  }
+  const pending = helperPending.get(String(payload.id))
+  if (!pending) {
+    return
+  }
+  helperPending.delete(String(payload.id))
+  if ('error' in payload) {
+    pending.reject(new Error(payload.error.message))
+  } else {
+    pending.resolve(payload.result)
+  }
+}
+
+const scanFileWithHelper = async (path: string) =>
+  sendHelperRequest<ScanFileResult>({
+    jsonrpc: '2.0',
+    id: Date.now(),
+    method: 'scanFile',
+    params: { path },
+  })
+
+const handleMissingPath = async (path: string) => {
+  if (!libraryStore) {
+    return
+  }
+  const missing = libraryStore.markFileMissing(path)
+  if (!missing) {
+    const removed = libraryStore.markMissingUnderPath(path)
+    if (removed.length === 0) {
+      return
+    }
+    for (const removedPath of removed) {
+      try {
+        await sendHelperRequest<UnregisterFontResult>({
+          jsonrpc: '2.0',
+          id: Date.now(),
+          method: 'unregisterFont',
+          params: { path: removedPath },
+        })
+      } catch {
+        // ignore unregister failures
+      }
+    }
+    return
+  }
+  try {
+    await sendHelperRequest<UnregisterFontResult>({
+      jsonrpc: '2.0',
+      id: Date.now(),
+      method: 'unregisterFont',
+      params: { path },
+    })
+  } catch {
+    // ignore unregister failures
+  }
+}
+
+const handleSourcePathChange = async (path: string) => {
+  if (!libraryStore) {
+    return
+  }
+  try {
+    const stats = await fs.stat(path)
+    if (stats.isDirectory()) {
+      const source = libraryStore.findSourceForPath(path)
+      if (source && source.path === path) {
+        const result = await libraryStore.scanSource(source.id, scanFileWithHelper)
+        for (const missingPath of result.missingPaths) {
+          await handleMissingPath(missingPath)
+        }
+      }
+      return
+    }
+    if (stats.isFile()) {
+      const result = await libraryStore.scanFilePath(path, scanFileWithHelper)
+      for (const missingPath of result.missingPaths) {
+        await handleMissingPath(missingPath)
+      }
+    }
+  } catch {
+    await handleMissingPath(path)
+  }
+}
+
+const processPendingPaths = async () => {
+  if (processingPaths || pendingPaths.size === 0) {
+    return
+  }
+  processingPaths = true
+  const paths = Array.from(pendingPaths)
+  pendingPaths.clear()
+  for (const path of paths) {
+    await handleSourcePathChange(path)
+  }
+  processingPaths = false
+  if (pendingPaths.size > 0) {
+    processPendingPaths()
+  }
+}
+
+const handleHelperEvent = (event: HelperEvent) => {
+  switch (event.event) {
+    case 'sourceChanged':
+      for (const change of event.changes) {
+        pendingPaths.add(change.path)
+      }
+      processPendingPaths()
+      break
+    case 'fileMissing':
+      pendingPaths.add(event.path)
+      processPendingPaths()
+      break
+    default:
+      break
+  }
 }
 
 const createWindow = async () => {
@@ -174,6 +312,7 @@ app.whenReady().then(async () => {
   }
   libraryStore = new LibraryStore(libraryRoot)
   await startHelper()
+  await syncHelperSources()
   registerFontProtocol()
   await createWindow()
 })
@@ -196,6 +335,23 @@ ipcMain.handle('helper:ping', async () => {
   return result
 })
 
+const syncHelperSources = async () => {
+  if (!libraryStore || !helperReady) {
+    return
+  }
+  const sources = libraryStore.listSources().filter((source) => source.isEnabled)
+  try {
+    await sendHelperRequest<WatchSourcesResult>({
+      jsonrpc: '2.0',
+      id: Date.now(),
+      method: 'watchSources',
+      params: { paths: sources.map((source) => source.path) },
+    })
+  } catch (error) {
+    console.error('Failed to sync helper sources', error)
+  }
+}
+
 ipcMain.handle('sources:list', async (): Promise<LibrarySource[]> => {
   if (!libraryStore) {
     return []
@@ -215,29 +371,23 @@ ipcMain.handle('sources:add', async (): Promise<LibrarySource | null> => {
     return null
   }
   const source = libraryStore.addSource(result.filePaths[0])
-  await libraryStore.scanSource(source.id, async (path) =>
-    sendHelperRequest<ScanFileResult>({
-      jsonrpc: '2.0',
-      id: Date.now(),
-      method: 'scanFile',
-      params: { path },
-    }),
-  )
+  const scanResult = await libraryStore.scanSource(source.id, scanFileWithHelper)
+  for (const missingPath of scanResult.missingPaths) {
+    await handleMissingPath(missingPath)
+  }
+  await syncHelperSources()
   return source
 })
 
 ipcMain.handle('sources:scan', async (_event, sourceId: number) => {
   if (!libraryStore) {
-    return { scanned: 0 }
+    return { scanned: 0, missingPaths: [] }
   }
-  return libraryStore.scanSource(sourceId, async (path) =>
-    sendHelperRequest<ScanFileResult>({
-      jsonrpc: '2.0',
-      id: Date.now(),
-      method: 'scanFile',
-      params: { path },
-    }),
-  )
+  const result = await libraryStore.scanSource(sourceId, scanFileWithHelper)
+  for (const missingPath of result.missingPaths) {
+    await handleMissingPath(missingPath)
+  }
+  return result
 })
 
 ipcMain.handle('library:listFamilies', async (): Promise<LibraryFamily[]> => {

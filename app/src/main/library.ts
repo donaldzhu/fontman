@@ -129,13 +129,171 @@ export class LibraryStore {
     this.db.prepare('DELETE FROM sources WHERE id = ?').run(id);
   }
 
-  async scanSource(sourceId: number, scanFile: ScanFileHandler): Promise<{ scanned: number }> {
+  private listSourcesRaw(): { id: number; path: string; isEnabled: number }[] {
+    return this.db
+      .prepare(`SELECT id, path, is_enabled as isEnabled FROM sources WHERE is_enabled = 1`)
+      .all() as { id: number; path: string; isEnabled: number }[];
+  }
+
+  findSourceForPath(filePath: string): { id: number; path: string } | null {
+    const sources = this.listSourcesRaw();
+    let bestMatch: { id: number; path: string } | null = null;
+    for (const source of sources) {
+      if (filePath.startsWith(source.path)) {
+        if (!bestMatch || source.path.length > bestMatch.path.length) {
+          bestMatch = { id: source.id, path: source.path };
+        }
+      }
+    }
+    return bestMatch;
+  }
+
+  private upsertScanResult(
+    filePath: string,
+    sourceId: number,
+    ext: string,
+    stats: { size: number; mtimeMs: number },
+    scanResult: ScanFileResult,
+  ) {
+    const lastSeenAt = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO font_files (source_id, path, ext, file_size, mtime, last_seen_at, status)
+         VALUES (?, ?, ?, ?, ?, ?, 'ok')
+         ON CONFLICT(path) DO UPDATE SET
+           source_id = excluded.source_id,
+           ext = excluded.ext,
+           file_size = excluded.file_size,
+           mtime = excluded.mtime,
+           last_seen_at = excluded.last_seen_at,
+           status = 'ok'`,
+      )
+      .run(sourceId, filePath, ext, stats.size, stats.mtimeMs, lastSeenAt);
+    const fileRow = this.db.prepare('SELECT id FROM font_files WHERE path = ?').get(filePath) as {
+      id: number;
+    };
+    this.db.prepare('DELETE FROM faces WHERE file_id = ?').run(fileRow.id);
+    for (const face of scanResult.faces) {
+      const familyKey = normalizeFamilyKey(face.familyName);
+      this.db
+        .prepare(
+          `INSERT INTO families (family_key, family_name_display)
+           VALUES (?, ?)
+           ON CONFLICT(family_key) DO UPDATE SET family_name_display = excluded.family_name_display`,
+        )
+        .run(familyKey, face.familyName);
+      const familyRow = this.db.prepare('SELECT id FROM families WHERE family_key = ?').get(familyKey) as {
+        id: number;
+      };
+      const previewSupported = PREVIEWABLE_EXTENSIONS.has(ext) ? 1 : 0;
+      const installSupported = INSTALLABLE_EXTENSIONS.has(ext) ? 1 : 0;
+      this.db
+        .prepare(
+          `INSERT INTO faces (
+            family_id,
+            file_id,
+            index_in_collection,
+            postscript_name,
+            full_name,
+            style_name,
+            weight,
+            width,
+            slant,
+            is_italic,
+            is_variable,
+            axes_json,
+            preview_supported_bool,
+            install_supported_bool
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          familyRow.id,
+          fileRow.id,
+          face.index,
+          face.postScriptName,
+          face.fullName,
+          face.styleName,
+          face.weight ?? null,
+          face.width ?? null,
+          face.slant ?? null,
+          face.isItalic ? 1 : 0,
+          face.isVariable ? 1 : 0,
+          null,
+          previewSupported,
+          installSupported,
+        );
+    }
+  }
+
+  markFileMissing(filePath: string): boolean {
+    const fileRow = this.db.prepare('SELECT id FROM font_files WHERE path = ?').get(filePath) as
+      | { id: number }
+      | undefined;
+    if (!fileRow) {
+      return false;
+    }
+    const now = new Date().toISOString();
+    this.db
+      .prepare(`UPDATE font_files SET status = 'missing', last_seen_at = ? WHERE id = ?`)
+      .run(now, fileRow.id);
+    this.db.prepare('UPDATE faces SET activated_bool = 0 WHERE file_id = ?').run(fileRow.id);
+    return true;
+  }
+
+  markMissingUnderPath(pathPrefix: string): string[] {
+    const rows = this.db
+      .prepare(`SELECT id, path FROM font_files WHERE path LIKE ? AND status != 'missing'`)
+      .all(`${pathPrefix}%`) as { id: number; path: string }[];
+    if (rows.length === 0) {
+      return [];
+    }
+    const now = new Date().toISOString();
+    const ids = rows.map((row) => row.id);
+    const placeholders = ids.map(() => '?').join(', ');
+    this.db
+      .prepare(`UPDATE font_files SET status = 'missing', last_seen_at = ? WHERE id IN (${placeholders})`)
+      .run(now, ...ids);
+    this.db.prepare(`UPDATE faces SET activated_bool = 0 WHERE file_id IN (${placeholders})`).run(...ids);
+    return rows.map((row) => row.path);
+  }
+
+  async scanFilePath(
+    filePath: string,
+    scanFile: ScanFileHandler,
+  ): Promise<{ scanned: number; missingPaths: string[] }> {
+    const ext = extname(filePath).toLowerCase();
+    if (!SUPPORTED_EXTENSIONS.has(ext)) {
+      return { scanned: 0, missingPaths: [] };
+    }
+    const source = this.findSourceForPath(filePath);
+    if (!source) {
+      return { scanned: 0, missingPaths: [] };
+    }
+    try {
+      const stats = await fs.stat(filePath);
+      if (!stats.isFile()) {
+        return { scanned: 0, missingPaths: [] };
+      }
+      const scanResult = await scanFile(filePath);
+      this.upsertScanResult(filePath, source.id, ext, stats, scanResult);
+      return { scanned: 1, missingPaths: [] };
+    } catch {
+      const missing = this.markFileMissing(filePath);
+      return { scanned: 0, missingPaths: missing ? [filePath] : [] };
+    }
+  }
+
+  async scanSource(
+    sourceId: number,
+    scanFile: ScanFileHandler,
+  ): Promise<{ scanned: number; missingPaths: string[] }> {
     const source = this.db.prepare('SELECT id, path FROM sources WHERE id = ?').get(sourceId) as
       | { id: number; path: string }
       | undefined;
     if (!source) {
-      return { scanned: 0 };
+      return { scanned: 0, missingPaths: [] };
     }
+    const scanStartedAt = new Date().toISOString();
     const files = await walkDirectory(source.path);
     let scanned = 0;
     for (const filePath of files) {
@@ -144,7 +302,6 @@ export class LibraryStore {
         continue;
       }
       const stats = await fs.stat(filePath);
-      const lastSeenAt = new Date().toISOString();
       let scanResult: ScanFileResult | null = null;
       try {
         scanResult = await scanFile(filePath);
@@ -161,80 +318,29 @@ export class LibraryStore {
                last_seen_at = excluded.last_seen_at,
                status = 'error'`,
           )
-          .run(source.id, filePath, ext, stats.size, stats.mtimeMs, lastSeenAt);
+          .run(source.id, filePath, ext, stats.size, stats.mtimeMs, new Date().toISOString());
         scanned += 1;
         continue;
       }
-      this.db
-        .prepare(
-          `INSERT INTO font_files (source_id, path, ext, file_size, mtime, last_seen_at, status)
-           VALUES (?, ?, ?, ?, ?, ?, 'ok')
-           ON CONFLICT(path) DO UPDATE SET
-             source_id = excluded.source_id,
-             ext = excluded.ext,
-             file_size = excluded.file_size,
-             mtime = excluded.mtime,
-             last_seen_at = excluded.last_seen_at,
-             status = 'ok'`,
-        )
-        .run(source.id, filePath, ext, stats.size, stats.mtimeMs, lastSeenAt);
-      const fileRow = this.db.prepare('SELECT id FROM font_files WHERE path = ?').get(filePath) as {
-        id: number;
-      };
-      this.db.prepare('DELETE FROM faces WHERE file_id = ?').run(fileRow.id);
-      for (const face of scanResult.faces) {
-        const familyKey = normalizeFamilyKey(face.familyName);
-        this.db
-          .prepare(
-            `INSERT INTO families (family_key, family_name_display)
-             VALUES (?, ?)
-             ON CONFLICT(family_key) DO UPDATE SET family_name_display = excluded.family_name_display`,
-          )
-          .run(familyKey, face.familyName);
-        const familyRow = this.db.prepare('SELECT id FROM families WHERE family_key = ?').get(familyKey) as {
-          id: number;
-        };
-        const previewSupported = PREVIEWABLE_EXTENSIONS.has(ext) ? 1 : 0;
-        const installSupported = INSTALLABLE_EXTENSIONS.has(ext) ? 1 : 0;
-        this.db
-          .prepare(
-            `INSERT INTO faces (
-              family_id,
-              file_id,
-              index_in_collection,
-              postscript_name,
-              full_name,
-              style_name,
-              weight,
-              width,
-              slant,
-              is_italic,
-              is_variable,
-              axes_json,
-              preview_supported_bool,
-              install_supported_bool
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .run(
-            familyRow.id,
-            fileRow.id,
-            face.index,
-            face.postScriptName,
-            face.fullName,
-            face.styleName,
-            face.weight ?? null,
-            face.width ?? null,
-            face.slant ?? null,
-            face.isItalic ? 1 : 0,
-            face.isVariable ? 1 : 0,
-            null,
-            previewSupported,
-            installSupported,
-          );
-      }
+      this.upsertScanResult(filePath, source.id, ext, stats, scanResult);
       scanned += 1;
     }
-    return { scanned };
+    const missingRows = this.db
+      .prepare(
+        `SELECT id, path FROM font_files
+         WHERE source_id = ? AND last_seen_at < ? AND status != 'missing'`,
+      )
+      .all(source.id, scanStartedAt) as { id: number; path: string }[];
+    if (missingRows.length > 0) {
+      const ids = missingRows.map((row) => row.id);
+      const placeholders = ids.map(() => '?').join(', ');
+      const now = new Date().toISOString();
+      this.db
+        .prepare(`UPDATE font_files SET status = 'missing', last_seen_at = ? WHERE id IN (${placeholders})`)
+        .run(now, ...ids);
+      this.db.prepare(`UPDATE faces SET activated_bool = 0 WHERE file_id IN (${placeholders})`).run(...ids);
+    }
+    return { scanned, missingPaths: missingRows.map((row) => row.path) };
   }
 
   listFamilies(): LibraryFamily[] {

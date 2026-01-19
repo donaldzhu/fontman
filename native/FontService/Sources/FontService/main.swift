@@ -1,12 +1,18 @@
 import CoreText
 import Foundation
 import AppKit
+import CoreServices
 
 struct JsonRpcRequest: Decodable {
     let jsonrpc: String
     let id: JsonRpcId
     let method: String
-    let params: [String: String]?
+    let params: JsonRpcParams?
+}
+
+struct JsonRpcParams: Decodable {
+    let path: String?
+    let paths: [String]?
 }
 
 enum JsonRpcId: Codable {
@@ -73,9 +79,135 @@ struct ScanFileResult: Encodable {
     let faces: [ScanFileFace]
 }
 
+struct WatchSourcesResult: Encodable {
+    let watching: Bool
+    let paths: [String]
+}
+
+struct UnregisterFontResult: Encodable {
+    let ok: Bool
+}
+
+struct SourceChange: Encodable {
+    let path: String
+    let flags: [String]?
+}
+
+struct HelperEvent: Encodable {
+    let event: String
+    let changes: [SourceChange]?
+    let path: String?
+}
+
+final class SourceWatcher {
+    private var stream: FSEventStreamRef?
+    private var runLoop: CFRunLoop?
+    private var thread: Thread?
+    private let handler: ([SourceChange], [String]) -> Void
+
+    init(handler: @escaping ([SourceChange], [String]) -> Void) {
+        self.handler = handler
+    }
+
+    func update(paths: [String]) {
+        stop()
+        guard !paths.isEmpty else {
+            return
+        }
+        let thread = Thread { [weak self] in
+            guard let self = self else { return }
+            self.runLoop = CFRunLoopGetCurrent()
+            var context = FSEventStreamContext(
+                version: 0,
+                info: UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque()),
+                retain: nil,
+                release: nil,
+                copyDescription: nil
+            )
+            let callback: FSEventStreamCallback = { _, clientCallBackInfo, numEvents, eventPathsPointer, eventFlagsPointer, _ in
+                guard let clientCallBackInfo else { return }
+                let watcher = Unmanaged<SourceWatcher>.fromOpaque(clientCallBackInfo).takeUnretainedValue()
+                let paths = unsafeBitCast(eventPathsPointer, to: NSArray.self) as? [String] ?? []
+                let flags = eventFlagsPointer?.withMemoryRebound(to: FSEventStreamEventFlags.self, capacity: numEvents) {
+                    Array(UnsafeBufferPointer(start: $0, count: numEvents))
+                } ?? []
+                var changes: [SourceChange] = []
+                var missingPaths: [String] = []
+                for index in 0..<paths.count {
+                    let flagValue = flags.count > index ? flags[index] : 0
+                    let flagStrings = watcher.flagStrings(flagValue)
+                    changes.append(SourceChange(path: paths[index], flags: flagStrings))
+                    if flagValue & FSEventStreamEventFlags(kFSEventStreamEventFlagItemRemoved) != 0 {
+                        missingPaths.append(paths[index])
+                    }
+                }
+                if !changes.isEmpty || !missingPaths.isEmpty {
+                    watcher.handler(changes, missingPaths)
+                }
+            }
+            let stream = FSEventStreamCreate(
+                nil,
+                callback,
+                &context,
+                paths as CFArray,
+                FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
+                0.2,
+                FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagUseCFTypes)
+            )
+            guard let stream else { return }
+            self.stream = stream
+            FSEventStreamScheduleWithRunLoop(stream, CFRunLoopGetCurrent(), CFRunLoopMode.defaultMode.rawValue)
+            FSEventStreamStart(stream)
+            CFRunLoopRun()
+        }
+        self.thread = thread
+        thread.start()
+    }
+
+    func stop() {
+        if let stream {
+            FSEventStreamStop(stream)
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+        }
+        stream = nil
+        if let runLoop {
+            CFRunLoopStop(runLoop)
+        }
+        runLoop = nil
+        thread = nil
+    }
+
+    private func flagStrings(_ flags: FSEventStreamEventFlags) -> [String] {
+        var values: [String] = []
+        if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemCreated) != 0 { values.append("created") }
+        if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemRemoved) != 0 { values.append("removed") }
+        if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemModified) != 0 { values.append("modified") }
+        if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemRenamed) != 0 { values.append("renamed") }
+        if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemInodeMetaMod) != 0 { values.append("inode-meta") }
+        if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemFinderInfoMod) != 0 { values.append("finder-info") }
+        if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemChangeOwner) != 0 { values.append("owner") }
+        if flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemXattrMod) != 0 { values.append("xattr") }
+        return values
+    }
+}
+
 final class JsonRpcServer {
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
+    private let watcher: SourceWatcher
+
+    init() {
+        watcher = SourceWatcher { [weak self] changes, missingPaths in
+            guard let self = self else { return }
+            if !changes.isEmpty {
+                self.emitEvent(HelperEvent(event: "sourceChanged", changes: changes, path: nil))
+            }
+            for path in missingPaths {
+                self.emitEvent(HelperEvent(event: "fileMissing", changes: nil, path: path))
+            }
+        }
+    }
 
     func start() {
         while let line = readLine() {
@@ -91,13 +223,24 @@ final class JsonRpcServer {
             let request = try decoder.decode(JsonRpcRequest.self, from: data)
             switch request.method {
             case "ping":
-                respond(result: PingResult(ok: true, version: "0.2.0"), id: request.id)
+                respond(result: PingResult(ok: true, version: "0.3.0"), id: request.id)
             case "scanFile":
-                guard let path = request.params?["path"] else {
+                guard let path = request.params?.path else {
                     respondError(id: request.id, code: -32602, message: "Missing path param")
                     return
                 }
                 let result = scanFile(path: path)
+                respond(result: result, id: request.id)
+            case "watchSources":
+                let paths = request.params?.paths ?? []
+                watcher.update(paths: paths)
+                respond(result: WatchSourcesResult(watching: !paths.isEmpty, paths: paths), id: request.id)
+            case "unregisterFont":
+                guard let path = request.params?.path else {
+                    respondError(id: request.id, code: -32602, message: "Missing path param")
+                    return
+                }
+                let result = unregisterFont(path: path)
                 respond(result: result, id: request.id)
             default:
                 respondError(id: request.id, code: -32601, message: "Method not found")
@@ -144,6 +287,18 @@ final class JsonRpcServer {
         } catch {
             print("{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32700,\"message\":\"Parse error\"}}")
             fflush(stdout)
+        }
+    }
+
+    private func emitEvent(_ event: HelperEvent) {
+        do {
+            let payload = try encoder.encode(event)
+            if let line = String(data: payload, encoding: .utf8) {
+                print(line)
+                fflush(stdout)
+            }
+        } catch {
+            // ignore event encoding errors
         }
     }
 
@@ -200,6 +355,13 @@ final class JsonRpcServer {
             )
         }
         return ScanFileResult(path: path, faces: faces)
+    }
+
+    private func unregisterFont(path: String) -> UnregisterFontResult {
+        let url = URL(fileURLWithPath: path)
+        var error: Unmanaged<CFError>?
+        let success = CTFontManagerUnregisterFontsForURL(url as CFURL, .user, &error)
+        return UnregisterFontResult(ok: success)
     }
 } // End of Class
 

@@ -43,6 +43,17 @@ export type HelperEvent =
       };
     }
   | {
+      event: 'sourceChanged';
+      changes: {
+        path: string;
+        flags?: string[];
+      }[];
+    }
+  | {
+      event: 'fileMissing';
+      path: string;
+    }
+  | {
       event: 'error';
       code: string;
       message: string;
@@ -71,7 +82,24 @@ export type ScanFileResult = {
   faces: ScanFileFace[];
 };
 
-export type FontServiceMethods = 'ping' | 'scanFile';
+export type WatchSourcesParams = {
+  paths: string[];
+};
+
+export type WatchSourcesResult = {
+  watching: boolean;
+  paths: string[];
+};
+
+export type UnregisterFontParams = {
+  path: string;
+};
+
+export type UnregisterFontResult = {
+  ok: boolean;
+};
+
+export type FontServiceMethods = 'ping' | 'scanFile' | 'watchSources' | 'unregisterFont';
 
 export type LibrarySource = {
   id: number;

@@ -7,7 +7,8 @@ const api = {
   pingHelper: (): Promise<PingResult> => ipcRenderer.invoke('helper:ping'),
   listSources: (): Promise<LibrarySource[]> => ipcRenderer.invoke('sources:list'),
   addSource: (): Promise<LibrarySource | null> => ipcRenderer.invoke('sources:add'),
-  scanSource: (sourceId: number): Promise<{ scanned: number }> => ipcRenderer.invoke('sources:scan', sourceId),
+  scanSource: (sourceId: number): Promise<{ scanned: number; missingPaths: string[] }> =>
+    ipcRenderer.invoke('sources:scan', sourceId),
   listFamilies: (): Promise<LibraryFamily[]> => ipcRenderer.invoke('library:listFamilies'),
 };
 
