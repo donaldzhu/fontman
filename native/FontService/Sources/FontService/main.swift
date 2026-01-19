@@ -487,6 +487,8 @@ final class JsonRpcServer {
 
         let descriptor = descriptors[index]
         let font = CTFontCreateWithFontDescriptor(descriptor, 0, nil)
+
+        // --- Features Logic ---
         var features: [FontFeature] = []
         if let featureList = CTFontCopyFeatures(font) as? [[CFString: Any]] {
             for typeDict in featureList {
@@ -499,6 +501,7 @@ final class JsonRpcServer {
                 for selector in selectors {
                     let isDefault = selector[kCTFontFeatureSelectorDefaultKey] as? Bool ?? false
                     let selectorId = selector[kCTFontFeatureSelectorIdentifierKey] as? Int ?? 0
+                    // Selector ID 1 is usually "Enable" for boolean features
                     if isDefault && selectorId == 1 {
                         enabledByDefault = true
                         break
@@ -507,24 +510,30 @@ final class JsonRpcServer {
                 if features.contains(where: { $0.tag == tag }) {
                     continue
                 }
-                features.append(FontFeature(tag: tag, name: name, enabledByDefault: enabledByDefault))
+                features.append(
+                    FontFeature(tag: tag, name: name, enabledByDefault: enabledByDefault))
             }
         }
 
+        // --- Axes Logic (Fixed) ---
         var axes: [FontVariationAxis] = []
         if let axisList = CTFontCopyVariationAxes(font) as? [[CFString: Any]] {
             for axis in axisList {
-                guard let minValue = axis[kCTFontVariationAxisMinimumValueKey] as? Double else {
+                // 1. Get values safely
+                guard
+                    let minValue = axis[kCTFontVariationAxisMinimumValueKey] as? Double,
+                    let maxValue = axis[kCTFontVariationAxisMaximumValueKey] as? Double,
+                    let defaultValue = axis[kCTFontVariationAxisDefaultValueKey] as? Double
+                else {
                     continue
                 }
-                guard let maxValue = axis[kCTFontVariationAxisMaximumValueKey] as? Double else {
-                    continue
-                }
-                guard let defaultValue = axis[kCTFontVariationAxisDefaultValueKey] as? Double else {
-                    continue
-                }
+
                 let name = axis[kCTFontVariationAxisNameKey] as? String ?? "Axis"
-                let tag = axis[kCTFontVariationAxisTagKey] as? String ?? name
+
+                // 2. FIX: Get the Identifier (Int) and convert to String
+                let identifier = axis[kCTFontVariationAxisIdentifierKey] as? Int ?? 0
+                let tag = intToTag(identifier)
+
                 axes.append(
                     FontVariationAxis(
                         tag: tag,
@@ -537,6 +546,16 @@ final class JsonRpcServer {
         }
 
         return FaceFeaturesResult(path: path, index: index, features: features, axes: axes)
+    }
+
+    private func intToTag(_ value: Int) -> String {
+        let bytes: [UInt8] = [
+            UInt8((value >> 24) & 0xFF),
+            UInt8((value >> 16) & 0xFF),
+            UInt8((value >> 8) & 0xFF),
+            UInt8(value & 0xFF),
+        ]
+        return String(bytes: bytes, encoding: .ascii) ?? "????"
     }
 }
 
