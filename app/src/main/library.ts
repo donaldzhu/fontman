@@ -1,7 +1,30 @@
 import Database from 'better-sqlite3';
 import { promises as fs } from 'node:fs';
 import { join, extname } from 'node:path';
-import type { LibraryFamily, LibraryFace, LibrarySource, ScanFileResult } from '@fontman/shared/src/protocol';
+import type {
+  LibraryFamily,
+  LibraryFace,
+  LibrarySource,
+  ScanFileResult,
+  FacetColumn,
+  FacetColumnType,
+} from '@fontman/shared/src/protocol';
+
+type FacetSchemaValue = {
+  key: string;
+  displayName: string;
+};
+
+type FacetSchemaColumn = {
+  key: string;
+  displayName: string;
+  type: FacetColumnType;
+  values?: FacetSchemaValue[];
+};
+
+export type FacetSchemaFile = {
+  columns: FacetSchemaColumn[];
+};
 
 type ScanFileHandler = (path: string) => Promise<ScanFileResult>;
 
@@ -30,6 +53,7 @@ export class LibraryStore {
   constructor(private libraryRoot: string) {
     const dbPath = join(libraryRoot, 'db.sqlite');
     this.db = new Database(dbPath);
+    this.db.pragma('foreign_keys = ON');
     this.db.pragma('journal_mode = WAL');
     this.initializeSchema();
   }
@@ -93,7 +117,114 @@ export class LibraryStore {
       CREATE INDEX IF NOT EXISTS idx_font_files_path ON font_files(path);
       CREATE INDEX IF NOT EXISTS idx_faces_full_name ON faces(full_name);
       CREATE INDEX IF NOT EXISTS idx_faces_postscript ON faces(postscript_name);
+
+      CREATE TABLE IF NOT EXISTS facet_columns (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        key TEXT NOT NULL UNIQUE,
+        display_name TEXT NOT NULL,
+        type TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS facet_values (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        column_id INTEGER NOT NULL,
+        value_key TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        FOREIGN KEY(column_id) REFERENCES facet_columns(id) ON DELETE CASCADE,
+        UNIQUE(column_id, value_key)
+      );
+
+      CREATE TABLE IF NOT EXISTS family_facet_values (
+        family_id INTEGER NOT NULL,
+        value_id INTEGER NOT NULL,
+        PRIMARY KEY (family_id, value_id),
+        FOREIGN KEY(family_id) REFERENCES families(id) ON DELETE CASCADE,
+        FOREIGN KEY(value_id) REFERENCES facet_values(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_family_facet_family ON family_facet_values(family_id);
+      CREATE INDEX IF NOT EXISTS idx_family_facet_value ON family_facet_values(value_id);
     `);
+  }
+
+  syncFacetSchema(schema: FacetSchemaFile) {
+    const columnKeys = new Set(schema.columns.map((column) => column.key));
+    const existingColumns = this.db
+      .prepare(`SELECT id, key FROM facet_columns`)
+      .all() as { id: number; key: string }[];
+    const deleteKeys = existingColumns.filter((column) => !columnKeys.has(column.key)).map((column) => column.key);
+    if (deleteKeys.length > 0) {
+      const placeholders = deleteKeys.map(() => '?').join(', ');
+      this.db.prepare(`DELETE FROM facet_columns WHERE key IN (${placeholders})`).run(...deleteKeys);
+    }
+    for (const column of schema.columns) {
+      this.db
+        .prepare(
+          `INSERT INTO facet_columns (key, display_name, type)
+           VALUES (?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET
+             display_name = excluded.display_name,
+             type = excluded.type`,
+        )
+        .run(column.key, column.displayName, column.type);
+      const columnRow = this.db
+        .prepare('SELECT id FROM facet_columns WHERE key = ?')
+        .get(column.key) as { id: number };
+      const columnId = columnRow.id;
+      const values = column.values ?? [];
+      const normalizedValues =
+        column.type === 'boolean' && values.length === 0
+          ? [{ key: 'true', displayName: column.displayName }]
+          : values;
+      const valueKeys = new Set(normalizedValues.map((value) => value.key));
+      const existingValues = this.db
+        .prepare('SELECT id, value_key as valueKey FROM facet_values WHERE column_id = ?')
+        .all(columnId) as { id: number; valueKey: string }[];
+      const valuesToDelete = existingValues.filter((value) => !valueKeys.has(value.valueKey));
+      if (valuesToDelete.length > 0) {
+        const placeholders = valuesToDelete.map(() => '?').join(', ');
+        this.db
+          .prepare(`DELETE FROM facet_values WHERE id IN (${placeholders})`)
+          .run(...valuesToDelete.map((value) => value.id));
+      }
+      for (const value of normalizedValues) {
+        this.db
+          .prepare(
+            `INSERT INTO facet_values (column_id, value_key, display_name)
+             VALUES (?, ?, ?)
+             ON CONFLICT(column_id, value_key) DO UPDATE SET
+               display_name = excluded.display_name`,
+          )
+          .run(columnId, value.key, value.displayName);
+      }
+    }
+  }
+
+  listFacetColumns(): FacetColumn[] {
+    const columns = this.db
+      .prepare(
+        `SELECT id, key, display_name as displayName, type
+         FROM facet_columns
+         ORDER BY display_name`,
+      )
+      .all() as { id: number; key: string; displayName: string; type: FacetColumnType }[];
+    const values = this.db
+      .prepare(
+        `SELECT id, column_id as columnId, value_key as valueKey, display_name as displayName
+         FROM facet_values
+         ORDER BY display_name`,
+      )
+      .all() as { id: number; columnId: number; valueKey: string; displayName: string }[];
+    const valuesByColumn = new Map<number, FacetColumn['values']>();
+    for (const value of values) {
+      const list = valuesByColumn.get(value.columnId) ?? [];
+      list.push(value);
+      valuesByColumn.set(value.columnId, list);
+    }
+    return columns.map((column) => ({
+      ...column,
+      values: valuesByColumn.get(column.id) ?? [],
+    }));
   }
 
   listSources(): LibrarySource[] {
@@ -347,6 +478,15 @@ export class LibraryStore {
     const familyRows = this.db
       .prepare(`SELECT id, family_name_display as familyName FROM families ORDER BY family_name_display`)
       .all() as { id: number; familyName: string }[];
+    const facetRows = this.db
+      .prepare(`SELECT family_id as familyId, value_id as valueId FROM family_facet_values`)
+      .all() as { familyId: number; valueId: number }[];
+    const facetMap = new Map<number, number[]>();
+    for (const row of facetRows) {
+      const list = facetMap.get(row.familyId) ?? [];
+      list.push(row.valueId);
+      facetMap.set(row.familyId, list);
+    }
     const faceRows = this.db
       .prepare(
         `SELECT
@@ -388,7 +528,22 @@ export class LibraryStore {
       id: family.id,
       familyName: family.familyName,
       faces: facesByFamily.get(family.id) ?? [],
+      facetValueIds: facetMap.get(family.id) ?? [],
     }));
+  }
+
+  setFamilyFacetValues(familyId: number, valueIds: number[]) {
+    this.db.prepare('DELETE FROM family_facet_values WHERE family_id = ?').run(familyId);
+    const uniqueValueIds = Array.from(new Set(valueIds));
+    if (uniqueValueIds.length === 0) {
+      return;
+    }
+    const insert = this.db.prepare(
+      'INSERT INTO family_facet_values (family_id, value_id) VALUES (?, ?)',
+    );
+    for (const valueId of uniqueValueIds) {
+      insert.run(familyId, valueId);
+    }
   }
 
   setFaceActivated(

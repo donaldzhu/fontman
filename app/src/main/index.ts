@@ -16,8 +16,10 @@ import type {
   UnregisterFontResult,
   RegisterFontResult,
   IsFontRegisteredResult,
+  FacetColumn,
 } from '@fontman/shared/src/protocol'
 import { LibraryStore } from './library'
+import { ensureFacetSchema } from './facets'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
@@ -56,6 +58,14 @@ const writeLibraryRootPointer = async (path: string) => {
   await fs.writeFile(getPointerPath(), path, 'utf-8')
 }
 
+const loadFacetSchema = async (libraryRoot: string) => {
+  if (!libraryStore) {
+    return
+  }
+  const schema = await ensureFacetSchema(libraryRoot)
+  libraryStore.syncFacetSchema(schema)
+}
+
 const chooseLibraryRoot = async (): Promise<string | null> => {
   const result = await dialog.showOpenDialog({
     title: 'Choose Font Library Folder',
@@ -67,6 +77,7 @@ const chooseLibraryRoot = async (): Promise<string | null> => {
   const selected = result.filePaths[0]
   await writeLibraryRootPointer(selected)
   libraryStore = new LibraryStore(selected)
+  await loadFacetSchema(selected)
   return selected
 }
 
@@ -361,6 +372,7 @@ app.whenReady().then(async () => {
     return
   }
   libraryStore = new LibraryStore(libraryRoot)
+  await loadFacetSchema(libraryRoot)
   await startHelper()
   await syncHelperSources()
   await reconcileActivationState()
@@ -447,6 +459,24 @@ ipcMain.handle('library:listFamilies', async (): Promise<LibraryFamily[]> => {
   }
   return libraryStore.listFamilies()
 })
+
+ipcMain.handle('facets:list', async (): Promise<FacetColumn[]> => {
+  if (!libraryStore) {
+    return []
+  }
+  return libraryStore.listFacetColumns()
+})
+
+ipcMain.handle(
+  'facets:setFamilyValues',
+  async (_event, familyId: number, valueIds: number[]): Promise<{ ok: boolean }> => {
+    if (!libraryStore) {
+      return { ok: false }
+    }
+    libraryStore.setFamilyFacetValues(familyId, valueIds)
+    return { ok: true }
+  },
+)
 
 ipcMain.handle(
   'faces:setActivated',

@@ -119,6 +119,82 @@ button:hover {
   margin: 0 0 6px;
 }
 
+.sidebar__section {
+  padding-top: 12px;
+  border-top: 1px solid #2a2f3a;
+}
+
+.facet {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.facet__title {
+  margin: 0;
+  font-size: 13px;
+  color: #c4cad6;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+}
+
+.facet__title select {
+  background: #0f1115;
+  border: 1px solid #2a2f3a;
+  border-radius: 6px;
+  color: inherit;
+  padding: 4px 8px;
+}
+
+.facet__options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.facet__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #c4cad6;
+}
+
+.inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.inspector__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.inspector__faces {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inspector__face {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.inspector__facets {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .content {
   padding: 24px 32px 40px;
   overflow: auto;
@@ -152,6 +228,15 @@ button:hover {
   min-width: 260px;
 }
 
+.content__label input[type='search'] {
+  background: #0f1115;
+  border: 1px solid #2a2f3a;
+  border-radius: 8px;
+  color: inherit;
+  padding: 6px 10px;
+  min-width: 220px;
+}
+
 .content__label input[type='range'] {
   accent-color: #4b6bff;
 }
@@ -168,6 +253,11 @@ button:hover {
   border: 1px solid #2a2f3a;
   border-radius: 16px;
   padding: 16px;
+}
+
+.family-card--selected {
+  border-color: #4b6bff;
+  box-shadow: 0 0 0 1px rgba(75, 107, 255, 0.4);
 }
 
 .family-card__header {
