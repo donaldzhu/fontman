@@ -362,9 +362,10 @@ export class LibraryStore {
            faces.width,
            faces.slant,
            faces.is_italic as isItalic,
-           faces.is_variable as isVariable,
-           faces.preview_supported_bool as previewSupported,
-           faces.install_supported_bool as installSupported
+          faces.is_variable as isVariable,
+          faces.preview_supported_bool as previewSupported,
+          faces.install_supported_bool as installSupported,
+          faces.activated_bool as activated
          FROM faces
          JOIN font_files ON font_files.id = faces.file_id
          ORDER BY faces.family_id, faces.weight, faces.width, faces.slant`,
@@ -379,6 +380,7 @@ export class LibraryStore {
         isVariable: Boolean(face.isVariable),
         previewSupported: Boolean(face.previewSupported),
         installSupported: Boolean(face.installSupported),
+        activated: Boolean(face.activated),
       });
       facesByFamily.set(face.familyId, list);
     }
@@ -386,6 +388,93 @@ export class LibraryStore {
       id: family.id,
       familyName: family.familyName,
       faces: facesByFamily.get(family.id) ?? [],
+    }));
+  }
+
+  setFaceActivated(
+    faceId: number,
+    activated: boolean,
+  ): {
+    filePath: string;
+    installSupported: boolean;
+    shouldRegister: boolean;
+    shouldUnregister: boolean;
+    activated: boolean;
+  } | null {
+    const faceRow = this.db
+      .prepare(
+        `SELECT
+           faces.file_id as fileId,
+           faces.install_supported_bool as installSupported,
+           font_files.path as filePath,
+           font_files.status as status
+         FROM faces
+         JOIN font_files ON font_files.id = faces.file_id
+         WHERE faces.id = ?`,
+      )
+      .get(faceId) as
+      | { fileId: number; installSupported: number; filePath: string; status: string }
+      | undefined;
+    if (!faceRow) {
+      return null;
+    }
+    if (!faceRow.installSupported || faceRow.status !== 'ok') {
+      this.db.prepare('UPDATE faces SET activated_bool = 0 WHERE id = ?').run(faceId);
+      return {
+        filePath: faceRow.filePath,
+        installSupported: Boolean(faceRow.installSupported),
+        shouldRegister: false,
+        shouldUnregister: false,
+        activated: false,
+      };
+    }
+    this.db.prepare('UPDATE faces SET activated_bool = ? WHERE id = ?').run(activated ? 1 : 0, faceId);
+    const activeCount = this.db
+      .prepare('SELECT COUNT(*) as count FROM faces WHERE file_id = ? AND activated_bool = 1')
+      .get(faceRow.fileId) as { count: number };
+    const shouldRegister = activated && activeCount.count === 1;
+    const shouldUnregister = !activated && activeCount.count === 0;
+    return {
+      filePath: faceRow.filePath,
+      installSupported: true,
+      shouldRegister,
+      shouldUnregister,
+      activated,
+    };
+  }
+
+  listActivationFiles(): {
+    fileId: number;
+    filePath: string;
+    status: string;
+    installSupported: boolean;
+    activatedCount: number;
+  }[] {
+    const rows = this.db
+      .prepare(
+        `SELECT
+           font_files.id as fileId,
+           font_files.path as filePath,
+           font_files.status as status,
+           MAX(faces.install_supported_bool) as installSupported,
+           SUM(faces.activated_bool) as activatedCount
+         FROM font_files
+         JOIN faces ON faces.file_id = font_files.id
+         GROUP BY font_files.id`,
+      )
+      .all() as {
+      fileId: number;
+      filePath: string;
+      status: string;
+      installSupported: number;
+      activatedCount: number;
+    }[];
+    return rows.map((row) => ({
+      fileId: row.fileId,
+      filePath: row.filePath,
+      status: row.status,
+      installSupported: Boolean(row.installSupported),
+      activatedCount: row.activatedCount ?? 0,
     }));
   }
 }

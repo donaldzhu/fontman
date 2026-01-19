@@ -90,6 +90,14 @@ struct UnregisterFontResult: Encodable {
     let ok: Bool
 }
 
+struct RegisterFontResult: Encodable {
+    let ok: Bool
+}
+
+struct IsFontRegisteredResult: Encodable {
+    let registered: Bool
+}
+
 struct SourceChange: Encodable {
     let path: String
     let flags: [String]?
@@ -247,6 +255,20 @@ final class JsonRpcServer {
                 }
                 let result = unregisterFont(path: path)
                 respond(result: result, id: request.id)
+            case "registerFont":
+                guard let path = request.params?.path else {
+                    respondError(id: request.id, code: -32602, message: "Missing path param")
+                    return
+                }
+                let result = registerFont(path: path)
+                respond(result: result, id: request.id)
+            case "isFontRegistered":
+                guard let path = request.params?.path else {
+                    respondError(id: request.id, code: -32602, message: "Missing path param")
+                    return
+                }
+                let result = isFontRegistered(path: path)
+                respond(result: result, id: request.id)
             default:
                 respondError(id: request.id, code: -32601, message: "Method not found")
             }
@@ -366,6 +388,19 @@ final class JsonRpcServer {
         var error: Unmanaged<CFError>?
         let success = CTFontManagerUnregisterFontsForURL(url as CFURL, .user, &error)
         return UnregisterFontResult(ok: success)
+    }
+
+    private func registerFont(path: String) -> RegisterFontResult {
+        let url = URL(fileURLWithPath: path)
+        var error: Unmanaged<CFError>?
+        let success = CTFontManagerRegisterFontsForURL(url as CFURL, .user, &error)
+        return RegisterFontResult(ok: success)
+    }
+
+    private func isFontRegistered(path: String) -> IsFontRegisteredResult {
+        let url = URL(fileURLWithPath: path)
+        let registered = CTFontManagerIsFontRegisteredForURL(url as CFURL, .user)
+        return IsFontRegisteredResult(registered: registered)
     }
 }
 
