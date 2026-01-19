@@ -3,6 +3,8 @@ import Foundation
 import AppKit
 import CoreServices
 
+// MARK: - Data Models
+
 struct JsonRpcRequest: Decodable {
     let jsonrpc: String
     let id: JsonRpcId
@@ -99,10 +101,11 @@ struct HelperEvent: Encodable {
     let path: String?
 }
 
+// MARK: - Source Watcher
+
 final class SourceWatcher {
     private var stream: FSEventStreamRef?
-    private var runLoop: CFRunLoop?
-    private var thread: Thread?
+    private let queue = DispatchQueue(label: "com.fontman.sourcewatcher")
     private let handler: ([SourceChange], [String]) -> Void
 
     init(handler: @escaping ([SourceChange], [String]) -> Void) {
@@ -111,57 +114,60 @@ final class SourceWatcher {
 
     func update(paths: [String]) {
         stop()
-        guard !paths.isEmpty else {
-            return
-        }
-        let thread = Thread { [weak self] in
-            guard let self = self else { return }
-            self.runLoop = CFRunLoopGetCurrent()
-            var context = FSEventStreamContext(
-                version: 0,
-                info: UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque()),
-                retain: nil,
-                release: nil,
-                copyDescription: nil
-            )
-            let callback: FSEventStreamCallback = { _, clientCallBackInfo, numEvents, eventPathsPointer, eventFlagsPointer, _ in
-                guard let clientCallBackInfo else { return }
-                let watcher = Unmanaged<SourceWatcher>.fromOpaque(clientCallBackInfo).takeUnretainedValue()
-                let paths = unsafeBitCast(eventPathsPointer, to: NSArray.self) as? [String] ?? []
-                let flags = eventFlagsPointer?.withMemoryRebound(to: FSEventStreamEventFlags.self, capacity: numEvents) {
-                    Array(UnsafeBufferPointer(start: $0, count: numEvents))
-                } ?? []
-                var changes: [SourceChange] = []
-                var missingPaths: [String] = []
-                for index in 0..<paths.count {
-                    let flagValue = flags.count > index ? flags[index] : 0
-                    let flagStrings = watcher.flagStrings(flagValue)
-                    changes.append(SourceChange(path: paths[index], flags: flagStrings))
-                    if flagValue & FSEventStreamEventFlags(kFSEventStreamEventFlagItemRemoved) != 0 {
-                        missingPaths.append(paths[index])
-                    }
-                }
-                if !changes.isEmpty || !missingPaths.isEmpty {
-                    watcher.handler(changes, missingPaths)
+        guard !paths.isEmpty else { return }
+
+        var context = FSEventStreamContext(
+            version: 0,
+            info: UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque()),
+            retain: nil,
+            release: nil,
+            copyDescription: nil
+        )
+
+        let callback: FSEventStreamCallback = { _, clientCallBackInfo, numEvents, eventPathsPointer, eventFlagsPointer, _ in
+            guard let clientCallBackInfo else { return }
+            let watcher = Unmanaged<SourceWatcher>.fromOpaque(clientCallBackInfo).takeUnretainedValue()
+
+            // Cast eventPathsPointer to NSArray -> [String]
+            let paths = unsafeBitCast(eventPathsPointer, to: NSArray.self) as? [String] ?? []
+
+            // eventFlagsPointer is a C-pointer to UInt32 (FSEventStreamEventFlags).
+            // We wrap it in a buffer pointer to convert to a Swift array.
+            let flags = Array(UnsafeBufferPointer(start: eventFlagsPointer, count: numEvents))
+
+            var changes: [SourceChange] = []
+            var missingPaths: [String] = []
+
+            for index in 0..<paths.count {
+                let flagValue = flags.count > index ? flags[index] : 0
+                changes.append(SourceChange(path: paths[index], flags: watcher.flagStrings(flagValue)))
+
+                // Check for removal
+                if (flagValue & FSEventStreamEventFlags(kFSEventStreamEventFlagItemRemoved)) != 0 {
+                    missingPaths.append(paths[index])
                 }
             }
-            let stream = FSEventStreamCreate(
-                nil,
-                callback,
-                &context,
-                paths as CFArray,
-                FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
-                0.2,
-                FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagUseCFTypes)
-            )
-            guard let stream else { return }
-            self.stream = stream
-            FSEventStreamScheduleWithRunLoop(stream, CFRunLoopGetCurrent(), CFRunLoopMode.defaultMode.rawValue)
-            FSEventStreamStart(stream)
-            CFRunLoopRun()
+            if !changes.isEmpty || !missingPaths.isEmpty {
+                watcher.handler(changes, missingPaths)
+            }
         }
-        self.thread = thread
-        thread.start()
+
+        let stream = FSEventStreamCreate(
+            nil,
+            callback,
+            &context,
+            paths as CFArray,
+            FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
+            0.2,
+            FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagUseCFTypes)
+        )
+
+        guard let stream else { return }
+        self.stream = stream
+
+        // Use modern Dispatch Queue instead of RunLoop
+        FSEventStreamSetDispatchQueue(stream, queue)
+        FSEventStreamStart(stream)
     }
 
     func stop() {
@@ -171,11 +177,6 @@ final class SourceWatcher {
             FSEventStreamRelease(stream)
         }
         stream = nil
-        if let runLoop {
-            CFRunLoopStop(runLoop)
-        }
-        runLoop = nil
-        thread = nil
     }
 
     private func flagStrings(_ flags: FSEventStreamEventFlags) -> [String] {
@@ -192,13 +193,17 @@ final class SourceWatcher {
     }
 }
 
+// MARK: - Server
+
 final class JsonRpcServer {
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
-    private let watcher: SourceWatcher
+
+    // Implicitly unwrapped optional to allow initialization after self is available
+    private var watcher: SourceWatcher!
 
     init() {
-        watcher = SourceWatcher { [weak self] changes, missingPaths in
+        self.watcher = SourceWatcher { [weak self] changes, missingPaths in
             guard let self = self else { return }
             if !changes.isEmpty {
                 self.emitEvent(HelperEvent(event: "sourceChanged", changes: changes, path: nil))
@@ -313,7 +318,6 @@ final class JsonRpcServer {
             let familyName = CTFontDescriptorCopyAttribute(descriptor, kCTFontFamilyNameAttribute) as? String ?? "Unknown"
 
             // Using literal strings "NSFullName" and "NSPostScriptName" to avoid Swift compiler issues
-            // with kCTFontFullNameAttribute / kCTFontPostScriptNameAttribute
             let fullName = CTFontDescriptorCopyAttribute(descriptor, "NSFullName" as CFString) as? String
                 ?? CTFontDescriptorCopyAttribute(descriptor, kCTFontDisplayNameAttribute) as? String
                 ?? familyName
@@ -363,7 +367,7 @@ final class JsonRpcServer {
         let success = CTFontManagerUnregisterFontsForURL(url as CFURL, .user, &error)
         return UnregisterFontResult(ok: success)
     }
-} // End of Class
+}
 
-// Start the server outside the class
+// Start the server
 JsonRpcServer().start()

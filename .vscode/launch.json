@@ -1,0 +1,22 @@
+{
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:fontman}/native/FontService",
+      "name": "Debug FontService (native/FontService)",
+      "program": "${workspaceFolder:fontman}/native/FontService/.build/debug/FontService",
+      "preLaunchTask": "swift: Build Debug FontService (native/FontService)"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:fontman}/native/FontService",
+      "name": "Release FontService (native/FontService)",
+      "program": "${workspaceFolder:fontman}/native/FontService/.build/release/FontService",
+      "preLaunchTask": "swift: Build Release FontService (native/FontService)"
+    }
+  ]
+}
