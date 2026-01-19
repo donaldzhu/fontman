@@ -6,6 +6,16 @@ export default defineConfig({
   main: {
     build: {
       outDir: 'dist/main',
+      rollupOptions: {
+        external: ['better-sqlite3'],
+      },
+      commonjsOptions: {
+        dynamicRequireTargets: [
+          'node_modules/better-sqlite3/build/**',
+          'node_modules/better-sqlite3/lib/**',
+        ],
+        ignoreDynamicRequires: true,
+      },
     },
   },
   preload: {

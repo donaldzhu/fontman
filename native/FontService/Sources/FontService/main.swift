@@ -149,6 +149,19 @@ final class JsonRpcServer {
 
     private func scanFile(path: String) -> ScanFileResult {
         let url = URL(fileURLWithPath: path)
+        guard let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor] else {
+            return ScanFileResult(path: path, faces: [])
+        }
+        var faces: [ScanFileFace] = []
+        for (index, descriptor) in descriptors.enumerated() {
+            let familyName = CTFontDescriptorCopyAttribute(descriptor, kCTFontFamilyNameAttribute) as? String ?? "Unknown"
+            let fullName = CTFontDescriptorCopyAttribute(descriptor, kCTFontFullNameAttribute) as? String
+                ?? CTFontDescriptorCopyAttribute(descriptor, kCTFontDisplayNameAttribute) as? String
+                ?? familyName
+            let postScriptName = CTFontDescriptorCopyAttribute(descriptor, kCTFontPostScriptNameAttribute) as? String
+                ?? CTFontDescriptorCopyAttribute(descriptor, kCTFontNameAttribute) as? String
+                ?? fullName
+            let styleName = CTFontDescriptorCopyAttribute(descriptor, kCTFontStyleNameAttribute) as? String ?? "Regular"
 
         // Obtain font descriptors from the file URL
         guard let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor] else {
@@ -177,6 +190,8 @@ final class JsonRpcServer {
             let weight = traits?[kCTFontWeightTrait] as? Double
             let width = traits?[kCTFontWidthTrait] as? Double
             let slant = traits?[kCTFontSlantTrait] as? Double
+            let symbolic = traits?[kCTFontSymbolicTrait] as? NSNumber
+            let isItalic = (symbolic?.intValue ?? 0) & CTFontSymbolicTraits.italicTrait.rawValue != 0
 
             // 3. Handle Bitwise logic for Italic check
             // We cast to UInt32 to match the type of CTFontSymbolicTraits.italicTrait.rawValue
