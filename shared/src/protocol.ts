@@ -82,6 +82,34 @@ export type ScanFileResult = {
   faces: ScanFileFace[];
 };
 
+export type FaceDescriptor = {
+  path: string;
+  index: number;
+};
+
+export type FontFeature = {
+  tag: string;
+  name: string;
+  enabledByDefault: boolean;
+};
+
+export type FontVariationAxis = {
+  tag: string;
+  name: string;
+  min: number;
+  max: number;
+  defaultValue: number;
+};
+
+export type FaceFeaturesParams = FaceDescriptor;
+
+export type FaceFeaturesResult = {
+  path: string;
+  index: number;
+  features: FontFeature[];
+  axes: FontVariationAxis[];
+};
+
 export type WatchSourcesParams = {
   paths: string[];
 };
@@ -121,7 +149,8 @@ export type FontServiceMethods =
   | 'watchSources'
   | 'registerFont'
   | 'unregisterFont'
-  | 'isFontRegistered';
+  | 'isFontRegistered'
+  | 'getFeaturesForFace';
 
 export type LibrarySource = {
   id: number;

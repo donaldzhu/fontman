@@ -15,6 +15,7 @@ struct JsonRpcRequest: Decodable {
 struct JsonRpcParams: Decodable {
     let path: String?
     let paths: [String]?
+    let index: Int?
 }
 
 enum JsonRpcId: Codable {
@@ -96,6 +97,27 @@ struct RegisterFontResult: Encodable {
 
 struct IsFontRegisteredResult: Encodable {
     let registered: Bool
+}
+
+struct FontFeature: Encodable {
+    let tag: String
+    let name: String
+    let enabledByDefault: Bool
+}
+
+struct FontVariationAxis: Encodable {
+    let tag: String
+    let name: String
+    let min: Double
+    let max: Double
+    let defaultValue: Double
+}
+
+struct FaceFeaturesResult: Encodable {
+    let path: String
+    let index: Int
+    let features: [FontFeature]
+    let axes: [FontVariationAxis]
 }
 
 struct SourceChange: Encodable {
@@ -291,6 +313,17 @@ final class JsonRpcServer {
                 }
                 let result = isFontRegistered(path: path)
                 respond(result: result, id: request.id)
+            case "getFeaturesForFace":
+                guard let path = request.params?.path else {
+                    respondError(id: request.id, code: -32602, message: "Missing path param")
+                    return
+                }
+                guard let index = request.params?.index else {
+                    respondError(id: request.id, code: -32602, message: "Missing index param")
+                    return
+                }
+                let result = getFeaturesForFace(path: path, index: index)
+                respond(result: result, id: request.id)
             default:
                 respondError(id: request.id, code: -32601, message: "Method not found")
             }
@@ -439,6 +472,71 @@ final class JsonRpcServer {
         // FIX: Use CTFontManagerGetScopeForURL to check status
         let scope = CTFontManagerGetScopeForURL(url as CFURL)
         return IsFontRegisteredResult(registered: scope != .none)
+    }
+
+    private func getFeaturesForFace(path: String, index: Int) -> FaceFeaturesResult {
+        let url = URL(fileURLWithPath: path)
+        guard
+            let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL)
+                as? [CTFontDescriptor],
+            index >= 0,
+            index < descriptors.count
+        else {
+            return FaceFeaturesResult(path: path, index: index, features: [], axes: [])
+        }
+
+        let descriptor = descriptors[index]
+        let font = CTFontCreateWithFontDescriptor(descriptor, 0, nil)
+        var features: [FontFeature] = []
+        if let featureList = CTFontCopyFeatures(font) as? [[CFString: Any]] {
+            for typeDict in featureList {
+                guard let tag = typeDict[kCTFontOpenTypeFeatureTag] as? String else {
+                    continue
+                }
+                let name = typeDict[kCTFontFeatureTypeNameKey] as? String ?? tag
+                let selectors = typeDict[kCTFontFeatureTypeSelectorsKey] as? [[CFString: Any]] ?? []
+                var enabledByDefault = false
+                for selector in selectors {
+                    let isDefault = selector[kCTFontFeatureSelectorDefaultKey] as? Bool ?? false
+                    let selectorId = selector[kCTFontFeatureSelectorIdentifierKey] as? Int ?? 0
+                    if isDefault && selectorId == 1 {
+                        enabledByDefault = true
+                        break
+                    }
+                }
+                if features.contains(where: { $0.tag == tag }) {
+                    continue
+                }
+                features.append(FontFeature(tag: tag, name: name, enabledByDefault: enabledByDefault))
+            }
+        }
+
+        var axes: [FontVariationAxis] = []
+        if let axisList = CTFontCopyVariationAxes(font) as? [[CFString: Any]] {
+            for axis in axisList {
+                guard let minValue = axis[kCTFontVariationAxisMinimumValueKey] as? Double else {
+                    continue
+                }
+                guard let maxValue = axis[kCTFontVariationAxisMaximumValueKey] as? Double else {
+                    continue
+                }
+                guard let defaultValue = axis[kCTFontVariationAxisDefaultValueKey] as? Double else {
+                    continue
+                }
+                let name = axis[kCTFontVariationAxisNameKey] as? String ?? "Axis"
+                let tag = axis[kCTFontVariationAxisTagKey] as? String ?? name
+                axes.append(
+                    FontVariationAxis(
+                        tag: tag,
+                        name: name,
+                        min: minValue,
+                        max: maxValue,
+                        defaultValue: defaultValue
+                    ))
+            }
+        }
+
+        return FaceFeaturesResult(path: path, index: index, features: features, axes: axes)
     }
 }
 

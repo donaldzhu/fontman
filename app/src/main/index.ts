@@ -17,6 +17,7 @@ import type {
   RegisterFontResult,
   IsFontRegisteredResult,
   FacetColumn,
+  FaceFeaturesResult,
 } from '@fontman/shared/src/protocol'
 import { LibraryStore } from './library'
 import { ensureFacetSchema } from './facets'
@@ -466,6 +467,24 @@ ipcMain.handle('facets:list', async (): Promise<FacetColumn[]> => {
   }
   return libraryStore.listFacetColumns()
 })
+
+ipcMain.handle(
+  'faces:getFeatures',
+  async (_event, path: string, index: number): Promise<FaceFeaturesResult> => {
+    try {
+      const result = await sendHelperRequest<FaceFeaturesResult>({
+        jsonrpc: '2.0',
+        id: Date.now(),
+        method: 'getFeaturesForFace',
+        params: { path, index },
+      })
+      return result
+    } catch (error) {
+      console.error('Failed to fetch features for face', error)
+      return { path, index, features: [], axes: [] }
+    }
+  },
+)
 
 ipcMain.handle(
   'facets:setFamilyValues',
