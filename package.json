@@ -4,7 +4,8 @@
   "packageManager": "pnpm@9.15.1",
   "scripts": {
     "dev": "pnpm -C app dev",
-    "build": "pnpm -C app build"
+    "build": "pnpm -C app build",
+    "postinstall": "pnpm exec electron-rebuild -f -w better-sqlite3"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.2"
