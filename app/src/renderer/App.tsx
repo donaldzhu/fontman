@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react'
 import type {
   LibraryFamily,
   LibraryFace,
@@ -7,26 +7,26 @@ import type {
   FaceFeaturesResult,
   FontFeature,
   FontVariationAxis,
-} from '@fontman/shared/src/protocol';
+} from '@fontman/shared/src/protocol'
 
 type PingStatus = {
-  ok: boolean;
-  version?: string;
-  error?: string;
-};
+  ok: boolean
+  version?: string
+  error?: string
+}
 
 declare global {
   interface Window {
     fontman: {
-      getLibraryRoot: () => Promise<string | null>;
-      chooseLibraryRoot: () => Promise<string | null>;
-      pingHelper: () => Promise<{ ok: true; version: string }>;
-      listSources: () => Promise<LibrarySource[]>;
-      addSource: () => Promise<LibrarySource | null>;
-      scanSource: (sourceId: number) => Promise<{ scanned: number }>;
-      listFamilies: () => Promise<LibraryFamily[]>;
-      listFacets: () => Promise<FacetColumn[]>;
-      getFaceFeatures: (path: string, index: number) => Promise<FaceFeaturesResult>;
+      getLibraryRoot: () => Promise<string | null>
+      chooseLibraryRoot: () => Promise<string | null>
+      pingHelper: () => Promise<{ ok: true; version: string }>
+      listSources: () => Promise<LibrarySource[]>
+      addSource: () => Promise<LibrarySource | null>
+      scanSource: (sourceId: number) => Promise<{ scanned: number }>
+      listFamilies: () => Promise<LibraryFamily[]>
+      listFacets: () => Promise<FacetColumn[]>
+      getFaceFeatures: (path: string, index: number) => Promise<FaceFeaturesResult>
       renderPreview: (
         path: string,
         index: number,
@@ -34,53 +34,53 @@ declare global {
         size: number,
         features: string[],
         variations: Record<string, number>,
-      ) => Promise<{ ok: boolean; pngBase64?: string }>;
-      setFamilyFacetValues: (familyId: number, valueIds: number[]) => Promise<{ ok: boolean }>;
-      setFaceActivated: (faceId: number, activated: boolean) => Promise<{ activated: boolean }>;
-    };
+      ) => Promise<{ ok: boolean; pngBase64?: string }>
+      setFamilyFacetValues: (familyId: number, valueIds: number[]) => Promise<{ ok: boolean }>
+      setFaceActivated: (faceId: number, activated: boolean) => Promise<{ activated: boolean }>
+    }
   }
 }
 
 type FaceFeaturesState = {
-  features: FontFeature[];
-  axes: FontVariationAxis[];
-};
+  features: FontFeature[]
+  axes: FontVariationAxis[]
+}
 
 type FaceSettingsState = {
-  featureStates: Record<string, boolean>;
-  axisValues: Record<string, number>;
-};
+  featureStates: Record<string, boolean>
+  axisValues: Record<string, number>
+}
 
 const buildFontFaceRule = (face: LibraryFace) => {
-  const src = `fontman://font?path=${encodeURIComponent(face.filePath)}`;
+  const src = `fontman://font?path=${encodeURIComponent(face.filePath)}`
   return `
     @font-face {
       font-family: "face_${face.id}";
       src: url("${src}");
       font-display: swap;
     }
-  `;
-};
+  `
+}
 
 const App = () => {
-  const [libraryRoot, setLibraryRoot] = useState<string | null>(null);
-  const [pingStatus, setPingStatus] = useState<PingStatus>({ ok: false });
-  const [sources, setSources] = useState<LibrarySource[]>([]);
-  const [families, setFamilies] = useState<LibraryFamily[]>([]);
-  const [facetColumns, setFacetColumns] = useState<FacetColumn[]>([]);
-  const [sampleText, setSampleText] = useState('The quick brown fox jumps over the lazy dog.');
-  const [fontSize, setFontSize] = useState(26);
-  const [isScanning, setIsScanning] = useState(false);
-  const [activationUpdate, setActivationUpdate] = useState(false);
-  const [selectedFamilyId, setSelectedFamilyId] = useState<number | null>(null);
-  const [selectedFaceId, setSelectedFaceId] = useState<number | null>(null);
-  const [searchText, setSearchText] = useState('');
-  const [openTypePanelOpen, setOpenTypePanelOpen] = useState(false);
-  const [faceFeatures, setFaceFeatures] = useState<Record<number, FaceFeaturesState>>({});
-  const [faceSettings, setFaceSettings] = useState<Record<number, FaceSettingsState>>({});
+  const [libraryRoot, setLibraryRoot] = useState<string | null>(null)
+  const [pingStatus, setPingStatus] = useState<PingStatus>({ ok: false })
+  const [sources, setSources] = useState<LibrarySource[]>([])
+  const [families, setFamilies] = useState<LibraryFamily[]>([])
+  const [facetColumns, setFacetColumns] = useState<FacetColumn[]>([])
+  const [sampleText, setSampleText] = useState('The quick brown fox jumps over the lazy dog.')
+  const [fontSize, setFontSize] = useState(26)
+  const [isScanning, setIsScanning] = useState(false)
+  const [activationUpdate, setActivationUpdate] = useState(false)
+  const [selectedFamilyId, setSelectedFamilyId] = useState<number | null>(null)
+  const [selectedFaceId, setSelectedFaceId] = useState<number | null>(null)
+  const [searchText, setSearchText] = useState('')
+  const [openTypePanelOpen, setOpenTypePanelOpen] = useState(false)
+  const [faceFeatures, setFaceFeatures] = useState<Record<number, FaceFeaturesState>>({})
+  const [faceSettings, setFaceSettings] = useState<Record<number, FaceSettingsState>>({})
   const [previewRenders, setPreviewRenders] = useState<
     Record<number, { key: string; dataUrl: string }>
-  >({});
+  >({})
   const [facetFilters, setFacetFilters] = useState<
     Record<
       number,
@@ -88,86 +88,86 @@ const App = () => {
       | { type: 'single'; selectedValueId: number | null }
       | { type: 'boolean'; state: 'any' | 'yes' | 'no' }
     >
-  >({});
+  >({})
 
   const refreshSources = async () => {
-    const data = await window.fontman.listSources();
-    setSources(data);
-  };
+    const data = await window.fontman.listSources()
+    setSources(data)
+  }
 
   const refreshFamilies = async () => {
-    const data = await window.fontman.listFamilies();
-    setFamilies(data);
-  };
+    const data = await window.fontman.listFamilies()
+    setFamilies(data)
+  }
 
   const refreshFacets = async () => {
-    const data = await window.fontman.listFacets();
-    setFacetColumns(data);
-  };
+    const data = await window.fontman.listFacets()
+    setFacetColumns(data)
+  }
 
   useEffect(() => {
-    window.fontman.getLibraryRoot().then(setLibraryRoot);
-    refreshSources();
-    refreshFamilies();
-    refreshFacets();
-  }, []);
+    window.fontman.getLibraryRoot().then(setLibraryRoot)
+    refreshSources()
+    refreshFamilies()
+    refreshFacets()
+  }, [])
 
   useEffect(() => {
     setFacetFilters((current) => {
-      const next = { ...current };
+      const next = { ...current }
       for (const column of facetColumns) {
         if (!next[column.id]) {
           if (column.type === 'multi') {
-            next[column.id] = { type: 'multi', selectedValueIds: [] };
+            next[column.id] = { type: 'multi', selectedValueIds: [] }
           } else if (column.type === 'single') {
-            next[column.id] = { type: 'single', selectedValueId: null };
+            next[column.id] = { type: 'single', selectedValueId: null }
           } else {
-            next[column.id] = { type: 'boolean', state: 'any' };
+            next[column.id] = { type: 'boolean', state: 'any' }
           }
         }
       }
-      return next;
-    });
-  }, [facetColumns]);
+      return next
+    })
+  }, [facetColumns])
 
   const handleChooseLibrary = async () => {
-    const root = await window.fontman.chooseLibraryRoot();
-    setLibraryRoot(root);
-    await refreshSources();
-    await refreshFamilies();
-    await refreshFacets();
-  };
+    const root = await window.fontman.chooseLibraryRoot()
+    setLibraryRoot(root)
+    await refreshSources()
+    await refreshFamilies()
+    await refreshFacets()
+  }
 
   const handlePing = async () => {
     try {
-      const result = await window.fontman.pingHelper();
-      setPingStatus({ ok: result.ok, version: result.version });
+      const result = await window.fontman.pingHelper()
+      setPingStatus({ ok: result.ok, version: result.version })
     } catch (error) {
-      setPingStatus({ ok: false, error: (error as Error).message });
+      setPingStatus({ ok: false, error: (error as Error).message })
     }
-  };
+  }
 
   const handleAddSource = async () => {
-    setIsScanning(true);
-    await window.fontman.addSource();
-    await refreshSources();
-    await refreshFamilies();
-    setIsScanning(false);
-  };
+    setIsScanning(true)
+    await window.fontman.addSource()
+    await refreshSources()
+    await refreshFamilies()
+    setIsScanning(false)
+  }
 
   const handleScanSource = async (sourceId: number) => {
-    setIsScanning(true);
-    await window.fontman.scanSource(sourceId);
-    await refreshFamilies();
-    setIsScanning(false);
-  };
+    setIsScanning(true)
+    await window.fontman.scanSource(sourceId)
+    await refreshFamilies()
+    setIsScanning(false)
+  }
 
   const handleToggleActivation = async (face: LibraryFace) => {
-    setActivationUpdate(true);
-    await window.fontman.setFaceActivated(face.id, !face.activated);
-    await refreshFamilies();
-    setActivationUpdate(false);
-  };
+    setActivationUpdate(true)
+    await window.fontman.setFaceActivated(face.id, !face.activated)
+    await refreshFamilies()
+    setActivationUpdate(false)
+  }
 
   const updateFacetFilter = (
     columnId: number,
@@ -176,132 +176,132 @@ const App = () => {
       | { type: 'single'; selectedValueId: number | null }
       | { type: 'boolean'; state: 'any' | 'yes' | 'no' },
   ) => {
-    setFacetFilters((current) => ({ ...current, [columnId]: update }));
-  };
+    setFacetFilters((current) => ({ ...current, [columnId]: update }))
+  }
 
   const handleToggleFacetFilterValue = (columnId: number, valueId: number) => {
-    const filter = facetFilters[columnId];
+    const filter = facetFilters[columnId]
     if (!filter || filter.type !== 'multi') {
-      return;
+      return
     }
     const selected = filter.selectedValueIds.includes(valueId)
       ? filter.selectedValueIds.filter((id) => id !== valueId)
-      : [...filter.selectedValueIds, valueId];
-    updateFacetFilter(columnId, { type: 'multi', selectedValueIds: selected });
-  };
+      : [...filter.selectedValueIds, valueId]
+    updateFacetFilter(columnId, { type: 'multi', selectedValueIds: selected })
+  }
 
   const selectedFamily = useMemo(
     () => families.find((family) => family.id === selectedFamilyId) ?? null,
     [families, selectedFamilyId],
-  );
+  )
   const selectedFace = useMemo(() => {
     if (!selectedFamily || selectedFaceId == null) {
-      return null;
+      return null
     }
-    return selectedFamily.faces.find((face) => face.id === selectedFaceId) ?? null;
-  }, [selectedFamily, selectedFaceId]);
+    return selectedFamily.faces.find((face) => face.id === selectedFaceId) ?? null
+  }, [selectedFamily, selectedFaceId])
 
   const handleFamilyFacetUpdate = async (familyId: number, valueIds: number[]) => {
-    await window.fontman.setFamilyFacetValues(familyId, valueIds);
-    await refreshFamilies();
-  };
+    await window.fontman.setFamilyFacetValues(familyId, valueIds)
+    await refreshFamilies()
+  }
 
   const handleToggleFamilyFacetValue = async (family: LibraryFamily, column: FacetColumn, valueId: number) => {
-    const current = family.facetValueIds;
-    let next = [...current];
+    const current = family.facetValueIds
+    let next = [...current]
     if (column.type === 'multi') {
       if (next.includes(valueId)) {
-        next = next.filter((id) => id !== valueId);
+        next = next.filter((id) => id !== valueId)
       } else {
-        next = [...next, valueId];
+        next = [...next, valueId]
       }
     } else {
-      next = next.filter((id) => !column.values.some((value) => value.id === id));
+      next = next.filter((id) => !column.values.some((value) => value.id === id))
       if (!current.includes(valueId)) {
-        next.push(valueId);
+        next.push(valueId)
       }
     }
-    await handleFamilyFacetUpdate(family.id, next);
-  };
+    await handleFamilyFacetUpdate(family.id, next)
+  }
 
   useEffect(() => {
     if (!selectedFamily) {
-      setSelectedFaceId(null);
-      return;
+      setSelectedFaceId(null)
+      return
     }
-    const faceIds = selectedFamily.faces.map((face) => face.id);
+    const faceIds = selectedFamily.faces.map((face) => face.id)
     if (selectedFaceId == null || !faceIds.includes(selectedFaceId)) {
-      setSelectedFaceId(selectedFamily.faces[0]?.id ?? null);
+      setSelectedFaceId(selectedFamily.faces[0]?.id ?? null)
     }
-  }, [selectedFamily, selectedFaceId]);
+  }, [selectedFamily, selectedFaceId])
 
   useEffect(() => {
     if (!selectedFace) {
-      return;
+      return
     }
-    void ensureFaceFeatures(selectedFace);
-  }, [selectedFace]);
+    void ensureFaceFeatures(selectedFace)
+  }, [selectedFace])
 
   const handleToggleBooleanFacet = async (family: LibraryFamily, column: FacetColumn) => {
-    const valueId = column.values[0]?.id;
+    const valueId = column.values[0]?.id
     if (!valueId) {
-      return;
+      return
     }
-    const current = family.facetValueIds;
-    const next = current.includes(valueId) ? current.filter((id) => id !== valueId) : [...current, valueId];
-    await handleFamilyFacetUpdate(family.id, next);
-  };
+    const current = family.facetValueIds
+    const next = current.includes(valueId) ? current.filter((id) => id !== valueId) : [...current, valueId]
+    await handleFamilyFacetUpdate(family.id, next)
+  }
 
   const fontFaceStyles = useMemo(() => {
-    const faces = families.flatMap((family) => family.faces);
-    return faces.map(buildFontFaceRule).join('\n');
-  }, [families]);
+    const faces = families.flatMap((family) => family.faces)
+    return faces.map(buildFontFaceRule).join('\n')
+  }, [families])
 
   const buildFeatureSettings = (faceId: number) => {
-    const settings = faceSettings[faceId];
+    const settings = faceSettings[faceId]
     if (!settings) {
-      return undefined;
+      return undefined
     }
-    const enabledEntries = Object.entries(settings.featureStates).filter(([, enabled]) => enabled);
+    const enabledEntries = Object.entries(settings.featureStates).filter(([, enabled]) => enabled)
     if (enabledEntries.length === 0) {
-      return '"liga" 1';
+      return '"liga" 1'
     }
-    return enabledEntries.map(([tag]) => `"${tag}" 1`).join(', ');
-  };
+    return enabledEntries.map(([tag]) => `"${tag}" 1`).join(', ')
+  }
 
   const buildVariationSettings = (faceId: number) => {
-    const settings = faceSettings[faceId];
+    const settings = faceSettings[faceId]
     if (!settings) {
-      return undefined;
+      return undefined
     }
-    const entries = Object.entries(settings.axisValues);
+    const entries = Object.entries(settings.axisValues)
     if (entries.length === 0) {
-      return undefined;
+      return undefined
     }
-    return entries.map(([tag, value]) => `"${tag}" ${value}`).join(', ');
-  };
+    return entries.map(([tag, value]) => `"${tag}" ${value}`).join(', ')
+  }
 
   const ensureFaceFeatures = async (face: LibraryFace): Promise<FaceFeaturesState> => {
     if (faceFeatures[face.id]) {
-      return faceFeatures[face.id];
+      return faceFeatures[face.id]
     }
-    const result = await window.fontman.getFaceFeatures(face.filePath, face.indexInCollection);
-    const nextFeatures = { features: result.features, axes: result.axes };
+    const result = await window.fontman.getFaceFeatures(face.filePath, face.indexInCollection)
+    const nextFeatures = { features: result.features, axes: result.axes }
     setFaceFeatures((current) => ({
       ...current,
       [face.id]: nextFeatures,
-    }));
+    }))
     setFaceSettings((current) => {
       if (current[face.id]) {
-        return current;
+        return current
       }
-      const featureStates: Record<string, boolean> = {};
+      const featureStates: Record<string, boolean> = {}
       for (const feature of result.features) {
-        featureStates[feature.tag] = feature.enabledByDefault;
+        featureStates[feature.tag] = feature.enabledByDefault
       }
-      const axisValues: Record<string, number> = {};
+      const axisValues: Record<string, number> = {}
       for (const axis of result.axes) {
-        axisValues[axis.tag] = axis.defaultValue;
+        axisValues[axis.tag] = axis.defaultValue
       }
       return {
         ...current,
@@ -309,68 +309,119 @@ const App = () => {
           featureStates,
           axisValues,
         },
-      };
-    });
-    return nextFeatures;
-  };
+      }
+    })
+    return nextFeatures
+  }
 
   const isCollectionFace = (face: LibraryFace) => {
-    const extension = face.filePath.split('.').pop()?.toLowerCase();
-    return extension === 'ttc' || extension === 'otc';
-  };
+    const extension = face.filePath.split('.').pop()?.toLowerCase()
+    return extension === 'ttc' || extension === 'otc'
+  }
 
   const getEnabledFeatureTags = (faceId: number, featureData?: FaceFeaturesState) => {
-    const settings = faceSettings[faceId];
+    const settings = faceSettings[faceId]
     if (settings) {
       return Object.entries(settings.featureStates)
         .filter(([, enabled]) => enabled)
         .map(([tag]) => tag)
-        .sort();
+        .sort()
     }
-    const fallback = featureData?.features ?? [];
-    return fallback.filter((feature) => feature.enabledByDefault).map((feature) => feature.tag).sort();
-  };
+    const fallback = featureData?.features ?? []
+    return fallback.filter((feature) => feature.enabledByDefault).map((feature) => feature.tag).sort()
+  }
 
   const getAxisValues = (faceId: number, featureData?: FaceFeaturesState) => {
-    const settings = faceSettings[faceId];
+    const settings = faceSettings[faceId]
     if (settings) {
-      return settings.axisValues;
+      return settings.axisValues
     }
-    const axisDefaults: Record<string, number> = {};
+    const axisDefaults: Record<string, number> = {}
     for (const axis of featureData?.axes ?? []) {
-      axisDefaults[axis.tag] = axis.defaultValue;
+      axisDefaults[axis.tag] = axis.defaultValue
     }
-    return axisDefaults;
-  };
+    return axisDefaults
+  }
 
   const buildPreviewKey = (faceId: number, featureData?: FaceFeaturesState) => {
-    const enabledFeatures = getEnabledFeatureTags(faceId, featureData);
-    const axisValues = getAxisValues(faceId, featureData);
+    const enabledFeatures = getEnabledFeatureTags(faceId, featureData)
+    const axisValues = getAxisValues(faceId, featureData)
     const axisEntries = Object.entries(axisValues)
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([tag, value]) => `${tag}:${value}`)
-      .join(',');
-    return `${faceId}|${fontSize}|${sampleText}|${enabledFeatures.join(',')}|${axisEntries}`;
-  };
+      .join(',')
+    return `${faceId}|${fontSize}|${sampleText}|${enabledFeatures.join(',')}|${axisEntries}`
+  }
+
+  const filteredFamilies = useMemo(() => {
+    const normalizedSearch = searchText.trim().toLowerCase()
+    return families.filter((family) => {
+      if (normalizedSearch) {
+        const familyMatch = family.familyName.toLowerCase().includes(normalizedSearch)
+        const faceMatch = family.faces.some((face) =>
+          `${face.fullName} ${face.styleName}`.toLowerCase().includes(normalizedSearch),
+        )
+        if (!familyMatch && !faceMatch) {
+          return false
+        }
+      }
+      for (const column of facetColumns) {
+        const filter = facetFilters[column.id]
+        if (!filter) {
+          continue
+        }
+        if (column.type === 'multi' && filter.type === 'multi') {
+          if (filter.selectedValueIds.length === 0) {
+            continue
+          }
+          const matches = filter.selectedValueIds.some((id) => family.facetValueIds.includes(id))
+          if (!matches) {
+            return false
+          }
+        } else if (column.type === 'single' && filter.type === 'single') {
+          if (filter.selectedValueId == null) {
+            continue
+          }
+          if (!family.facetValueIds.includes(filter.selectedValueId)) {
+            return false
+          }
+        } else if (column.type === 'boolean' && filter.type === 'boolean') {
+          const valueId = column.values[0]?.id
+          if (!valueId || filter.state === 'any') {
+            continue
+          }
+          const hasValue = family.facetValueIds.includes(valueId)
+          if (filter.state === 'yes' && !hasValue) {
+            return false
+          }
+          if (filter.state === 'no' && hasValue) {
+            return false
+          }
+        }
+      }
+      return true
+    })
+  }, [families, facetColumns, facetFilters, searchText])
+
 
   useEffect(() => {
-    let cancelled = false;
+    let cancelled = false
     const run = async () => {
-      const faces = filteredFamilies.flatMap((family) => family.faces);
+      const faces = filteredFamilies.flatMap((family) => family.faces)
       for (const face of faces) {
         if (!isCollectionFace(face) || !face.previewSupported) {
-          continue;
+          continue
         }
-        const featureData = await ensureFaceFeatures(face);
+        const featureData = await ensureFaceFeatures(face)
         if (cancelled) {
-          return;
+          return
         }
-        const enabledFeatures = getEnabledFeatureTags(face.id, featureData);
-        const axisValues = getAxisValues(face.id, featureData);
-        const previewKey = buildPreviewKey(face.id, featureData);
-        const cached = previewRenders[face.id];
+        const enabledFeatures = getEnabledFeatureTags(face.id, featureData)
+        const axisValues = getAxisValues(face.id, featureData)
+        const previewKey = buildPreviewKey(face.id, featureData)
+        const cached = previewRenders[face.id]
         if (cached?.key === previewKey) {
-          continue;
+          continue
         }
         const result = await window.fontman.renderPreview(
           face.filePath,
@@ -379,74 +430,24 @@ const App = () => {
           fontSize,
           enabledFeatures,
           axisValues,
-        );
+        )
         if (cancelled) {
-          return;
+          return
         }
         if (result.ok && result.pngBase64) {
-          const dataUrl = `data:image/png;base64,${result.pngBase64}`;
+          const dataUrl = `data:image/png;base64,${result.pngBase64}`
           setPreviewRenders((current) => ({
             ...current,
             [face.id]: { key: previewKey, dataUrl },
-          }));
+          }))
         }
       }
-    };
-    void run();
+    }
+    void run()
     return () => {
-      cancelled = true;
-    };
-  }, [filteredFamilies, sampleText, fontSize, faceSettings, faceFeatures, previewRenders]);
-
-  const filteredFamilies = useMemo(() => {
-    const normalizedSearch = searchText.trim().toLowerCase();
-    return families.filter((family) => {
-      if (normalizedSearch) {
-        const familyMatch = family.familyName.toLowerCase().includes(normalizedSearch);
-        const faceMatch = family.faces.some((face) =>
-          `${face.fullName} ${face.styleName}`.toLowerCase().includes(normalizedSearch),
-        );
-        if (!familyMatch && !faceMatch) {
-          return false;
-        }
-      }
-      for (const column of facetColumns) {
-        const filter = facetFilters[column.id];
-        if (!filter) {
-          continue;
-        }
-        if (column.type === 'multi' && filter.type === 'multi') {
-          if (filter.selectedValueIds.length === 0) {
-            continue;
-          }
-          const matches = filter.selectedValueIds.some((id) => family.facetValueIds.includes(id));
-          if (!matches) {
-            return false;
-          }
-        } else if (column.type === 'single' && filter.type === 'single') {
-          if (filter.selectedValueId == null) {
-            continue;
-          }
-          if (!family.facetValueIds.includes(filter.selectedValueId)) {
-            return false;
-          }
-        } else if (column.type === 'boolean' && filter.type === 'boolean') {
-          const valueId = column.values[0]?.id;
-          if (!valueId || filter.state === 'any') {
-            continue;
-          }
-          const hasValue = family.facetValueIds.includes(valueId);
-          if (filter.state === 'yes' && !hasValue) {
-            return false;
-          }
-          if (filter.state === 'no' && hasValue) {
-            return false;
-          }
-        }
-      }
-      return true;
-    });
-  }, [families, facetColumns, facetFilters, searchText]);
+      cancelled = true
+    }
+  }, [filteredFamilies, sampleText, fontSize, faceSettings, faceFeatures, previewRenders])
 
   return (
     <div className="app">
@@ -498,7 +499,7 @@ const App = () => {
             <h3>Facet Filters</h3>
             {facetColumns.length === 0 && <p className="sidebar__empty">No facet schema yet.</p>}
             {facetColumns.map((column) => {
-              const filter = facetFilters[column.id];
+              const filter = facetFilters[column.id]
               if (column.type === 'multi' && filter?.type === 'multi') {
                 return (
                   <div key={column.id} className="facet">
@@ -516,7 +517,7 @@ const App = () => {
                       ))}
                     </div>
                   </div>
-                );
+                )
               }
               if (column.type === 'single' && filter?.type === 'single') {
                 return (
@@ -541,7 +542,7 @@ const App = () => {
                       </select>
                     </label>
                   </div>
-                );
+                )
               }
               if (column.type === 'boolean' && filter?.type === 'boolean') {
                 return (
@@ -563,9 +564,9 @@ const App = () => {
                       </select>
                     </label>
                   </div>
-                );
+                )
               }
-              return null;
+              return null
             })}
           </div>
           <div className="sidebar__section">
@@ -582,9 +583,9 @@ const App = () => {
                         type="button"
                         className={`inspector__select${selectedFace?.id === face.id ? ' is-active' : ''}`}
                         onClick={(event) => {
-                          event.stopPropagation();
-                          setSelectedFaceId(face.id);
-                          void ensureFaceFeatures(face);
+                          event.stopPropagation()
+                          setSelectedFaceId(face.id)
+                          void ensureFaceFeatures(face)
                         }}
                       >
                         {selectedFace?.id === face.id ? 'Selected' : 'Select'}
@@ -593,8 +594,8 @@ const App = () => {
                         type="button"
                         disabled={!face.installSupported || activationUpdate}
                         onClick={(event) => {
-                          event.stopPropagation();
-                          handleToggleActivation(face);
+                          event.stopPropagation()
+                          handleToggleActivation(face)
                         }}
                       >
                         {face.activated ? 'Deactivate' : 'Activate'}
@@ -614,8 +615,8 @@ const App = () => {
                                 type="checkbox"
                                 checked={selectedFamily.facetValueIds.includes(value.id)}
                                 onChange={(event) => {
-                                  event.stopPropagation();
-                                  handleToggleFamilyFacetValue(selectedFamily, column, value.id);
+                                  event.stopPropagation()
+                                  handleToggleFamilyFacetValue(selectedFamily, column, value.id)
                                 }}
                               />
                               {value.displayName}
@@ -633,11 +634,11 @@ const App = () => {
                                 selectedFamily.facetValueIds.includes(value.id),
                               )}
                               onChange={(event) => {
-                                event.stopPropagation();
+                                event.stopPropagation()
                                 const next = selectedFamily.facetValueIds.filter(
                                   (id) => !column.values.some((value) => value.id === id),
-                                );
-                                handleFamilyFacetUpdate(selectedFamily.id, next);
+                                )
+                                handleFamilyFacetUpdate(selectedFamily.id, next)
                               }}
                             />
                             None
@@ -649,8 +650,8 @@ const App = () => {
                                 name={`facet-${column.id}`}
                                 checked={selectedFamily.facetValueIds.includes(value.id)}
                                 onChange={(event) => {
-                                  event.stopPropagation();
-                                  handleToggleFamilyFacetValue(selectedFamily, column, value.id);
+                                  event.stopPropagation()
+                                  handleToggleFamilyFacetValue(selectedFamily, column, value.id)
                                 }}
                               />
                               {value.displayName}
@@ -668,8 +669,8 @@ const App = () => {
                                 : false
                             }
                             onChange={(event) => {
-                              event.stopPropagation();
-                              handleToggleBooleanFacet(selectedFamily, column);
+                              event.stopPropagation()
+                              handleToggleBooleanFacet(selectedFamily, column)
                             }}
                           />
                           Enabled
@@ -750,7 +751,7 @@ const App = () => {
                                     },
                                     axisValues: current[selectedFace.id]?.axisValues ?? {},
                                   },
-                                }));
+                                }))
                               }}
                             />
                             <span>{feature.name}</span>
@@ -778,7 +779,7 @@ const App = () => {
                               step="1"
                               value={faceSettings[selectedFace.id]?.axisValues[axis.tag] ?? axis.defaultValue}
                               onChange={(event) => {
-                                const nextValue = Number(event.target.value);
+                                const nextValue = Number(event.target.value)
                                 setFaceSettings((current) => ({
                                   ...current,
                                   [selectedFace.id]: {
@@ -788,7 +789,7 @@ const App = () => {
                                       [axis.tag]: nextValue,
                                     },
                                   },
-                                }));
+                                }))
                               }}
                             />
                             <span className="opentype-panel__axis-value">
@@ -823,10 +824,10 @@ const App = () => {
                       key={face.id}
                       className={`face-tile${selectedFaceId === face.id ? ' face-tile--selected' : ''}`}
                       onClick={(event) => {
-                        event.stopPropagation();
-                        setSelectedFamilyId(family.id);
-                        setSelectedFaceId(face.id);
-                        void ensureFaceFeatures(face);
+                        event.stopPropagation()
+                        setSelectedFamilyId(family.id)
+                        setSelectedFaceId(face.id)
+                        void ensureFaceFeatures(face)
                       }}
                     >
                       <p className="face-tile__name">{face.fullName}</p>
@@ -836,8 +837,8 @@ const App = () => {
                         className="face-tile__toggle"
                         disabled={!face.installSupported || activationUpdate}
                         onClick={(event) => {
-                          event.stopPropagation();
-                          handleToggleActivation(face);
+                          event.stopPropagation()
+                          handleToggleActivation(face)
                         }}
                       >
                         {face.activated ? 'Deactivate' : 'Activate'}
@@ -888,7 +889,7 @@ const App = () => {
         </main>
       </div>
     </div>
-  );
-};
+  )
+}
 
-export default App;
+export default App
