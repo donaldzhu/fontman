@@ -49,4 +49,57 @@ export type HelperEvent =
       context?: unknown;
     };
 
-export type FontServiceMethods = 'ping';
+export type ScanFileParams = {
+  path: string;
+};
+
+export type ScanFileFace = {
+  index: number;
+  familyName: string;
+  fullName: string;
+  postScriptName: string;
+  styleName: string;
+  weight?: number;
+  width?: number;
+  slant?: number;
+  isItalic: boolean;
+  isVariable: boolean;
+};
+
+export type ScanFileResult = {
+  path: string;
+  faces: ScanFileFace[];
+};
+
+export type FontServiceMethods = 'ping' | 'scanFile';
+
+export type LibrarySource = {
+  id: number;
+  path: string;
+  isEnabled: boolean;
+  createdAt: string;
+};
+
+export type LibraryFace = {
+  id: number;
+  familyId: number;
+  fileId: number;
+  filePath: string;
+  indexInCollection: number;
+  postscriptName: string;
+  fullName: string;
+  styleName: string;
+  weight?: number | null;
+  width?: number | null;
+  slant?: number | null;
+  isItalic: boolean;
+  isVariable: boolean;
+  previewSupported: boolean;
+  installSupported: boolean;
+};
+
+export type LibraryFamily = {
+  id: number;
+  familyName: string;
+  faces: LibraryFace[];
+};

@@ -1,9 +1,18 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron';
-import { join } from 'node:path';
+import { app, BrowserWindow, dialog, ipcMain, protocol } from 'electron';
+import { join, extname } from 'node:path';
 import { promises as fs } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import type { JsonRpcResponse, JsonRpcRequest, PingResult } from '@fontman/shared/src/protocol';
+import { createReadStream } from 'node:fs';
+import type {
+  JsonRpcResponse,
+  JsonRpcRequest,
+  PingResult,
+  ScanFileResult,
+  LibrarySource,
+  LibraryFamily,
+} from '@fontman/shared/src/protocol';
+import { LibraryStore } from './library';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
@@ -11,6 +20,14 @@ const LIBRARY_POINTER_FILE = 'library-root.txt';
 let helperProcess: ReturnType<typeof spawn> | null = null;
 let helperReady = false;
 let helperBuffer = '';
+let libraryStore: LibraryStore | null = null;
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'fontman',
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true },
+  },
+]);
 
 const getPointerPath = () => join(app.getPath('userData'), LIBRARY_POINTER_FILE);
 
@@ -28,11 +45,7 @@ const writeLibraryRootPointer = async (path: string) => {
   await fs.writeFile(getPointerPath(), path, 'utf-8');
 };
 
-const ensureLibraryRoot = async (): Promise<string | null> => {
-  const existing = await readLibraryRootPointer();
-  if (existing) {
-    return existing;
-  }
+const chooseLibraryRoot = async (): Promise<string | null> => {
   const result = await dialog.showOpenDialog({
     title: 'Choose Font Library Folder',
     properties: ['openDirectory', 'createDirectory'],
@@ -42,7 +55,16 @@ const ensureLibraryRoot = async (): Promise<string | null> => {
   }
   const selected = result.filePaths[0];
   await writeLibraryRootPointer(selected);
+  libraryStore = new LibraryStore(selected);
   return selected;
+};
+
+const ensureLibraryRoot = async (): Promise<string | null> => {
+  const existing = await readLibraryRootPointer();
+  if (existing) {
+    return existing;
+  }
+  return chooseLibraryRoot();
 };
 
 const resolveHelperPath = () => {
@@ -69,6 +91,33 @@ const startHelper = async () => {
     helperReady = false;
   });
   helperReady = true;
+};
+
+const registerFontProtocol = () => {
+  protocol.registerStreamProtocol('fontman', (request, callback) => {
+    const url = new URL(request.url);
+    const filePath = url.searchParams.get('path');
+    if (!filePath) {
+      callback({ statusCode: 400 });
+      return;
+    }
+    const ext = extname(filePath).toLowerCase();
+    const mime =
+      ext === '.otf'
+        ? 'font/otf'
+        : ext === '.ttf'
+          ? 'font/ttf'
+          : ext === '.woff'
+            ? 'font/woff'
+            : ext === '.woff2'
+              ? 'font/woff2'
+              : 'application/octet-stream';
+    callback({
+      statusCode: 200,
+      headers: { 'Content-Type': mime },
+      data: createReadStream(filePath),
+    });
+  });
 };
 
 const sendHelperRequest = async <TResult>(request: JsonRpcRequest): Promise<TResult> => {
@@ -123,7 +172,9 @@ app.whenReady().then(async () => {
     app.quit();
     return;
   }
+  libraryStore = new LibraryStore(libraryRoot);
   await startHelper();
+  registerFontProtocol();
   await createWindow();
 });
 
@@ -134,7 +185,7 @@ app.on('window-all-closed', () => {
 });
 
 ipcMain.handle('library:getRoot', async () => readLibraryRootPointer());
-ipcMain.handle('library:chooseRoot', async () => ensureLibraryRoot());
+ipcMain.handle('library:chooseRoot', async () => chooseLibraryRoot());
 ipcMain.handle('helper:ping', async () => {
   await startHelper();
   const result = await sendHelperRequest<PingResult>({
@@ -143,4 +194,55 @@ ipcMain.handle('helper:ping', async () => {
     method: 'ping',
   });
   return result;
+});
+
+ipcMain.handle('sources:list', async (): Promise<LibrarySource[]> => {
+  if (!libraryStore) {
+    return [];
+  }
+  return libraryStore.listSources();
+});
+
+ipcMain.handle('sources:add', async (): Promise<LibrarySource | null> => {
+  if (!libraryStore) {
+    return null;
+  }
+  const result = await dialog.showOpenDialog({
+    title: 'Add Font Source Folder',
+    properties: ['openDirectory'],
+  });
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+  const source = libraryStore.addSource(result.filePaths[0]);
+  await libraryStore.scanSource(source.id, async (path) =>
+    sendHelperRequest<ScanFileResult>({
+      jsonrpc: '2.0',
+      id: Date.now(),
+      method: 'scanFile',
+      params: { path },
+    }),
+  );
+  return source;
+});
+
+ipcMain.handle('sources:scan', async (_event, sourceId: number) => {
+  if (!libraryStore) {
+    return { scanned: 0 };
+  }
+  return libraryStore.scanSource(sourceId, async (path) =>
+    sendHelperRequest<ScanFileResult>({
+      jsonrpc: '2.0',
+      id: Date.now(),
+      method: 'scanFile',
+      params: { path },
+    }),
+  );
+});
+
+ipcMain.handle('library:listFamilies', async (): Promise<LibraryFamily[]> => {
+  if (!libraryStore) {
+    return [];
+  }
+  return libraryStore.listFamilies();
 });

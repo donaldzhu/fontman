@@ -1,3 +1,4 @@
+import CoreText
 import Foundation
 
 struct JsonRpcRequest: Decodable {
@@ -7,7 +8,7 @@ struct JsonRpcRequest: Decodable {
     let params: [String: String]?
 }
 
-enum JsonRpcId: Decodable {
+enum JsonRpcId: Codable {
     case string(String)
     case number(Int)
 
@@ -20,20 +21,32 @@ enum JsonRpcId: Decodable {
         }
     }
 
-    func encode() -> String {
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
         switch self {
         case .string(let value):
-            return "\"\(value)\""
+            try container.encode(value)
         case .number(let value):
-            return String(value)
+            try container.encode(value)
         }
     }
 }
 
-struct JsonRpcSuccess: Encodable {
-    let jsonrpc: String
-    let id: String
-    let result: PingResult
+struct JsonRpcResponse<Result: Encodable>: Encodable {
+    let jsonrpc = "2.0"
+    let id: JsonRpcId
+    let result: Result
+}
+
+struct JsonRpcErrorResponse: Encodable {
+    let jsonrpc = "2.0"
+    let id: JsonRpcId?
+    let error: JsonRpcErrorDetail
+}
+
+struct JsonRpcErrorDetail: Encodable {
+    let code: Int
+    let message: String
 }
 
 struct PingResult: Encodable {
@@ -41,8 +54,27 @@ struct PingResult: Encodable {
     let version: String
 }
 
+struct ScanFileFace: Encodable {
+    let index: Int
+    let familyName: String
+    let fullName: String
+    let postScriptName: String
+    let styleName: String
+    let weight: Double?
+    let width: Double?
+    let slant: Double?
+    let isItalic: Bool
+    let isVariable: Bool
+}
+
+struct ScanFileResult: Encodable {
+    let path: String
+    let faces: [ScanFileFace]
+}
+
 final class JsonRpcServer {
     private let decoder = JSONDecoder()
+    private let encoder = JSONEncoder()
 
     func start() {
         while let line = readLine() {
@@ -58,7 +90,14 @@ final class JsonRpcServer {
             let request = try decoder.decode(JsonRpcRequest.self, from: data)
             switch request.method {
             case "ping":
-                respondPing(id: request.id)
+                respond(result: PingResult(ok: true, version: "0.2.0"), id: request.id)
+            case "scanFile":
+                guard let path = request.params?["path"] else {
+                    respondError(id: request.id, code: -32602, message: "Missing path param")
+                    return
+                }
+                let result = scanFile(path: path)
+                respond(result: result, id: request.id)
             default:
                 respondError(id: request.id, code: -32601, message: "Method not found")
             }
@@ -67,23 +106,86 @@ final class JsonRpcServer {
         }
     }
 
-    private func respondPing(id: JsonRpcId) {
-        let result = PingResult(ok: true, version: "0.1.0")
-        let response = "{\"jsonrpc\":\"2.0\",\"id\":\(id.encode()),\"result\":{\"ok\":true,\"version\":\"\(result.version)\"}}"
-        print(response)
-        fflush(stdout)
+    private func respond<Result: Encodable>(result: Result, id: JsonRpcId) {
+        do {
+            let response = JsonRpcResponse(id: id, result: result)
+            let payload = try encoder.encode(response)
+            if let line = String(data: payload, encoding: .utf8) {
+                print(line)
+                fflush(stdout)
+            }
+        } catch {
+            respondError(id: id, code: -32603, message: "Failed to encode response")
+        }
     }
 
     private func respondError(id: JsonRpcId, code: Int, message: String) {
-        let response = "{\"jsonrpc\":\"2.0\",\"id\":\(id.encode()),\"error\":{\"code\":\(code),\"message\":\"\(message)\"}}"
-        print(response)
-        fflush(stdout)
+        do {
+            let response = JsonRpcErrorResponse(id: id, error: JsonRpcErrorDetail(code: code, message: message))
+            let payload = try encoder.encode(response)
+            if let line = String(data: payload, encoding: .utf8) {
+                print(line)
+                fflush(stdout)
+            }
+        } catch {
+            respondParseError()
+        }
     }
 
     private func respondParseError() {
-        let response = "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32700,\"message\":\"Parse error\"}}"
-        print(response)
-        fflush(stdout)
+        do {
+            let response = JsonRpcErrorResponse(id: nil, error: JsonRpcErrorDetail(code: -32700, message: "Parse error"))
+            let payload = try encoder.encode(response)
+            if let line = String(data: payload, encoding: .utf8) {
+                print(line)
+                fflush(stdout)
+            }
+        } catch {
+            print("{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32700,\"message\":\"Parse error\"}}")
+            fflush(stdout)
+        }
+    }
+
+    private func scanFile(path: String) -> ScanFileResult {
+        let url = URL(fileURLWithPath: path)
+        guard let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL) as? [CTFontDescriptor] else {
+            return ScanFileResult(path: path, faces: [])
+        }
+        var faces: [ScanFileFace] = []
+        for (index, descriptor) in descriptors.enumerated() {
+            let familyName = CTFontDescriptorCopyAttribute(descriptor, kCTFontFamilyNameAttribute) as? String ?? "Unknown"
+            let fullName = CTFontDescriptorCopyAttribute(descriptor, kCTFontFullNameAttribute) as? String
+                ?? CTFontDescriptorCopyAttribute(descriptor, kCTFontDisplayNameAttribute) as? String
+                ?? familyName
+            let postScriptName = CTFontDescriptorCopyAttribute(descriptor, kCTFontPostScriptNameAttribute) as? String
+                ?? CTFontDescriptorCopyAttribute(descriptor, kCTFontNameAttribute) as? String
+                ?? fullName
+            let styleName = CTFontDescriptorCopyAttribute(descriptor, kCTFontStyleNameAttribute) as? String ?? "Regular"
+            let traits = CTFontDescriptorCopyAttribute(descriptor, kCTFontTraitsAttribute) as? [CFString: Any]
+            let weight = traits?[kCTFontWeightTrait] as? Double
+            let width = traits?[kCTFontWidthTrait] as? Double
+            let slant = traits?[kCTFontSlantTrait] as? Double
+            let symbolic = traits?[kCTFontSymbolicTrait] as? NSNumber
+            let isItalic = (symbolic?.intValue ?? 0) & CTFontSymbolicTraits.italicTrait.rawValue != 0
+            let variation = CTFontDescriptorCopyAttribute(descriptor, kCTFontVariationAttribute)
+            let isVariable = variation != nil
+
+            faces.append(
+                ScanFileFace(
+                    index: index,
+                    familyName: familyName,
+                    fullName: fullName,
+                    postScriptName: postScriptName,
+                    styleName: styleName,
+                    weight: weight,
+                    width: width,
+                    slant: slant,
+                    isItalic: isItalic,
+                    isVariable: isVariable
+                )
+            )
+        }
+        return ScanFileResult(path: path, faces: faces)
     }
 }
 
