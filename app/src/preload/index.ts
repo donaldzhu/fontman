@@ -10,6 +10,8 @@ const api = {
   scanSource: (sourceId: number): Promise<{ scanned: number; missingPaths: string[] }> =>
     ipcRenderer.invoke('sources:scan', sourceId),
   listFamilies: (): Promise<LibraryFamily[]> => ipcRenderer.invoke('library:listFamilies'),
+  setFaceActivated: (faceId: number, activated: boolean): Promise<{ activated: boolean }> =>
+    ipcRenderer.invoke('faces:setActivated', faceId, activated),
 };
 
 contextBridge.exposeInMainWorld('fontman', api);

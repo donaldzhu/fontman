@@ -202,6 +202,22 @@ button:hover {
   color: #9aa3b3;
 }
 
+.face-tile__toggle {
+  margin-bottom: 10px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid #2a2f3a;
+  background: #111722;
+  color: #d7dbea;
+  font-size: 12px;
+}
+
+.face-tile__toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .face-tile__preview {
   white-space: nowrap;
   overflow: hidden;

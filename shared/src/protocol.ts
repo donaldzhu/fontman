@@ -99,7 +99,29 @@ export type UnregisterFontResult = {
   ok: boolean;
 };
 
-export type FontServiceMethods = 'ping' | 'scanFile' | 'watchSources' | 'unregisterFont';
+export type RegisterFontParams = {
+  path: string;
+};
+
+export type RegisterFontResult = {
+  ok: boolean;
+};
+
+export type IsFontRegisteredParams = {
+  path: string;
+};
+
+export type IsFontRegisteredResult = {
+  registered: boolean;
+};
+
+export type FontServiceMethods =
+  | 'ping'
+  | 'scanFile'
+  | 'watchSources'
+  | 'registerFont'
+  | 'unregisterFont'
+  | 'isFontRegistered';
 
 export type LibrarySource = {
   id: number;
@@ -124,6 +146,7 @@ export type LibraryFace = {
   isVariable: boolean;
   previewSupported: boolean;
   installSupported: boolean;
+  activated: boolean;
 };
 
 export type LibraryFamily = {

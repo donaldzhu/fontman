@@ -17,6 +17,7 @@ declare global {
       addSource: () => Promise<LibrarySource | null>;
       scanSource: (sourceId: number) => Promise<{ scanned: number }>;
       listFamilies: () => Promise<LibraryFamily[]>;
+      setFaceActivated: (faceId: number, activated: boolean) => Promise<{ activated: boolean }>;
     };
   }
 }
@@ -40,6 +41,7 @@ const App = () => {
   const [sampleText, setSampleText] = useState('The quick brown fox jumps over the lazy dog.');
   const [fontSize, setFontSize] = useState(26);
   const [isScanning, setIsScanning] = useState(false);
+  const [activationUpdate, setActivationUpdate] = useState(false);
 
   const refreshSources = async () => {
     const data = await window.fontman.listSources();
@@ -56,6 +58,7 @@ const App = () => {
     refreshSources();
     refreshFamilies();
   }, []);
+
 
   const handleChooseLibrary = async () => {
     const root = await window.fontman.chooseLibraryRoot();
@@ -86,6 +89,13 @@ const App = () => {
     await window.fontman.scanSource(sourceId);
     await refreshFamilies();
     setIsScanning(false);
+  };
+
+  const handleToggleActivation = async (face: LibraryFace) => {
+    setActivationUpdate(true);
+    await window.fontman.setFaceActivated(face.id, !face.activated);
+    await refreshFamilies();
+    setActivationUpdate(false);
   };
 
   const fontFaceStyles = useMemo(() => {
@@ -178,6 +188,14 @@ const App = () => {
                     <div key={face.id} className="face-tile">
                       <p className="face-tile__name">{face.fullName}</p>
                       <p className="face-tile__style">{face.styleName}</p>
+                      <button
+                        type="button"
+                        className="face-tile__toggle"
+                        disabled={!face.installSupported || activationUpdate}
+                        onClick={() => handleToggleActivation(face)}
+                      >
+                        {face.activated ? 'Deactivate' : 'Activate'}
+                      </button>
                       <div
                         className="face-tile__preview"
                         style={{ fontFamily: `face_${face.id}`, fontSize }}

@@ -14,6 +14,8 @@ import type {
   HelperEvent,
   WatchSourcesResult,
   UnregisterFontResult,
+  RegisterFontResult,
+  IsFontRegisteredResult,
 } from '@fontman/shared/src/protocol'
 import { LibraryStore } from './library'
 
@@ -226,6 +228,54 @@ const handleMissingPath = async (path: string) => {
   }
 }
 
+const reconcileActivationState = async () => {
+  if (!libraryStore) {
+    return
+  }
+  const activationFiles = libraryStore.listActivationFiles()
+  for (const entry of activationFiles) {
+    if (!entry.installSupported || entry.status !== 'ok') {
+      continue
+    }
+    let registered = false
+    try {
+      const status = await sendHelperRequest<IsFontRegisteredResult>({
+        jsonrpc: '2.0',
+        id: Date.now(),
+        method: 'isFontRegistered',
+        params: { path: entry.filePath },
+      })
+      registered = status.registered
+    } catch {
+      continue
+    }
+    if (entry.activatedCount > 0 && !registered) {
+      try {
+        await sendHelperRequest<RegisterFontResult>({
+          jsonrpc: '2.0',
+          id: Date.now(),
+          method: 'registerFont',
+          params: { path: entry.filePath },
+        })
+      } catch {
+        // ignore activation failures
+      }
+    }
+    if (entry.activatedCount === 0 && registered) {
+      try {
+        await sendHelperRequest<UnregisterFontResult>({
+          jsonrpc: '2.0',
+          id: Date.now(),
+          method: 'unregisterFont',
+          params: { path: entry.filePath },
+        })
+      } catch {
+        // ignore unregister failures
+      }
+    }
+  }
+}
+
 const handleSourcePathChange = async (path: string) => {
   if (!libraryStore) {
     return
@@ -313,6 +363,7 @@ app.whenReady().then(async () => {
   libraryStore = new LibraryStore(libraryRoot)
   await startHelper()
   await syncHelperSources()
+  await reconcileActivationState()
   registerFontProtocol()
   await createWindow()
 })
@@ -396,3 +447,44 @@ ipcMain.handle('library:listFamilies', async (): Promise<LibraryFamily[]> => {
   }
   return libraryStore.listFamilies()
 })
+
+ipcMain.handle(
+  'faces:setActivated',
+  async (_event, faceId: number, activated: boolean): Promise<{ activated: boolean }> => {
+    if (!libraryStore) {
+      return { activated: false }
+    }
+    const update = libraryStore.setFaceActivated(faceId, activated)
+    if (!update) {
+      return { activated: false }
+    }
+    if (!update.installSupported) {
+      return { activated: false }
+    }
+    if (update.shouldRegister) {
+      try {
+        await sendHelperRequest<RegisterFontResult>({
+          jsonrpc: '2.0',
+          id: Date.now(),
+          method: 'registerFont',
+          params: { path: update.filePath },
+        })
+      } catch {
+        // ignore register failures
+      }
+    }
+    if (update.shouldUnregister) {
+      try {
+        await sendHelperRequest<UnregisterFontResult>({
+          jsonrpc: '2.0',
+          id: Date.now(),
+          method: 'unregisterFont',
+          params: { path: update.filePath },
+        })
+      } catch {
+        // ignore unregister failures
+      }
+    }
+    return { activated: update.activated }
+  },
+)
