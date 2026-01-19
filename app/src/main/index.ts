@@ -18,6 +18,7 @@ import type {
   IsFontRegisteredResult,
   FacetColumn,
   FaceFeaturesResult,
+  RenderPreviewResult,
 } from '@fontman/shared/src/protocol'
 import { LibraryStore } from './library'
 import { ensureFacetSchema } from './facets'
@@ -482,6 +483,32 @@ ipcMain.handle(
     } catch (error) {
       console.error('Failed to fetch features for face', error)
       return { path, index, features: [], axes: [] }
+    }
+  },
+)
+
+ipcMain.handle(
+  'faces:renderPreview',
+  async (
+    _event,
+    path: string,
+    index: number,
+    text: string,
+    size: number,
+    features: string[],
+    variations: Record<string, number>,
+  ): Promise<RenderPreviewResult> => {
+    try {
+      const result = await sendHelperRequest<RenderPreviewResult>({
+        jsonrpc: '2.0',
+        id: Date.now(),
+        method: 'renderPreview',
+        params: { path, index, text, size, features, variations },
+      })
+      return result
+    } catch (error) {
+      console.error('Failed to render preview', error)
+      return { ok: false }
     }
   },
 )

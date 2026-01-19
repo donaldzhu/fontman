@@ -16,6 +16,10 @@ struct JsonRpcParams: Decodable {
     let path: String?
     let paths: [String]?
     let index: Int?
+    let text: String?
+    let size: Double?
+    let features: [String]?
+    let variations: [String: Double]?
 }
 
 enum JsonRpcId: Codable {
@@ -118,6 +122,11 @@ struct FaceFeaturesResult: Encodable {
     let index: Int
     let features: [FontFeature]
     let axes: [FontVariationAxis]
+}
+
+struct RenderPreviewResult: Encodable {
+    let ok: Bool
+    let pngBase64: String?
 }
 
 struct SourceChange: Encodable {
@@ -323,6 +332,33 @@ final class JsonRpcServer {
                     return
                 }
                 let result = getFeaturesForFace(path: path, index: index)
+                respond(result: result, id: request.id)
+            case "renderPreview":
+                guard let path = request.params?.path else {
+                    respondError(id: request.id, code: -32602, message: "Missing path param")
+                    return
+                }
+                guard let index = request.params?.index else {
+                    respondError(id: request.id, code: -32602, message: "Missing index param")
+                    return
+                }
+                guard let text = request.params?.text else {
+                    respondError(id: request.id, code: -32602, message: "Missing text param")
+                    return
+                }
+                guard let size = request.params?.size else {
+                    respondError(id: request.id, code: -32602, message: "Missing size param")
+                    return
+                }
+                let features = request.params?.features ?? []
+                let variations = request.params?.variations ?? [:]
+                let result = renderPreview(
+                    path: path,
+                    index: index,
+                    text: text,
+                    size: size,
+                    features: features,
+                    variations: variations)
                 respond(result: result, id: request.id)
             default:
                 respondError(id: request.id, code: -32601, message: "Method not found")
@@ -556,6 +592,122 @@ final class JsonRpcServer {
             UInt8(value & 0xFF),
         ]
         return String(bytes: bytes, encoding: .ascii) ?? "????"
+    }
+
+    private func tagToInt(_ tag: String) -> Int? {
+        let scalars = Array(tag.utf8)
+        guard scalars.count == 4 else {
+            return nil
+        }
+        let value =
+            (Int(scalars[0]) << 24)
+            | (Int(scalars[1]) << 16)
+            | (Int(scalars[2]) << 8)
+            | Int(scalars[3])
+        return value
+    }
+
+    private func renderPreview(
+        path: String,
+        index: Int,
+        text: String,
+        size: Double,
+        features: [String],
+        variations: [String: Double]
+    ) -> RenderPreviewResult {
+        let url = URL(fileURLWithPath: path)
+        guard
+            let descriptors = CTFontManagerCreateFontDescriptorsFromURL(url as CFURL)
+                as? [CTFontDescriptor],
+            index >= 0,
+            index < descriptors.count
+        else {
+            return RenderPreviewResult(ok: false, pngBase64: nil)
+        }
+
+        var descriptor = descriptors[index]
+        var attributes: [CFString: Any] = [:]
+
+        if !variations.isEmpty {
+            var variationMap: [NSNumber: NSNumber] = [:]
+            for (tag, value) in variations {
+                guard let axisId = tagToInt(tag) else {
+                    continue
+                }
+                variationMap[NSNumber(value: axisId)] = NSNumber(value: value)
+            }
+            if !variationMap.isEmpty {
+                attributes[kCTFontVariationAttribute] = variationMap
+            }
+        }
+
+        if !features.isEmpty {
+            let settings: [[CFString: Any]] = features.map { tag in
+                [
+                    kCTFontOpenTypeFeatureTag: tag,
+                    kCTFontOpenTypeFeatureValue: 1,
+                ]
+            }
+            attributes[kCTFontFeatureSettingsAttribute] = settings
+        }
+
+        if !attributes.isEmpty {
+            descriptor = CTFontDescriptorCreateCopyWithAttributes(
+                descriptor,
+                attributes as CFDictionary)
+        }
+
+        let font = CTFontCreateWithFontDescriptor(descriptor, CGFloat(size), nil)
+        let attributed = NSAttributedString(
+            string: text,
+            attributes: [
+                .font: font,
+                .foregroundColor: NSColor.labelColor,
+            ])
+        let line = CTLineCreateWithAttributedString(attributed)
+
+        var ascent: CGFloat = 0
+        var descent: CGFloat = 0
+        var leading: CGFloat = 0
+        let lineWidth = CTLineGetTypographicBounds(line, &ascent, &descent, &leading)
+
+        let padding: CGFloat = 8
+        let width = max(1, ceil(CGFloat(lineWidth) + padding * 2))
+        let height = max(1, ceil(ascent + descent + leading + padding * 2))
+
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+
+        guard
+            let context = CGContext(
+                data: nil,
+                width: Int(width),
+                height: Int(height),
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: colorSpace,
+                bitmapInfo: bitmapInfo)
+        else {
+            return RenderPreviewResult(ok: false, pngBase64: nil)
+        }
+
+        context.setFillColor(NSColor.clear.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+
+        context.translateBy(x: 0, y: height)
+        context.scaleBy(x: 1, y: -1)
+        context.textPosition = CGPoint(x: padding, y: padding + descent)
+        CTLineDraw(line, context)
+
+        guard let image = context.makeImage() else {
+            return RenderPreviewResult(ok: false, pngBase64: nil)
+        }
+
+        let bitmapRep = NSBitmapImageRep(cgImage: image)
+        guard let pngData = bitmapRep.representation(using: .png, properties: [:]) else {
+            return RenderPreviewResult(ok: false, pngBase64: nil)
+        }
+        return RenderPreviewResult(ok: true, pngBase64: pngData.base64EncodedString())
     }
 }
 
