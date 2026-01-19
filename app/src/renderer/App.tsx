@@ -4,6 +4,9 @@ import type {
   LibraryFace,
   LibrarySource,
   FacetColumn,
+  FaceFeaturesResult,
+  FontFeature,
+  FontVariationAxis,
 } from '@fontman/shared/src/protocol';
 
 type PingStatus = {
@@ -23,11 +26,22 @@ declare global {
       scanSource: (sourceId: number) => Promise<{ scanned: number }>;
       listFamilies: () => Promise<LibraryFamily[]>;
       listFacets: () => Promise<FacetColumn[]>;
+      getFaceFeatures: (path: string, index: number) => Promise<FaceFeaturesResult>;
       setFamilyFacetValues: (familyId: number, valueIds: number[]) => Promise<{ ok: boolean }>;
       setFaceActivated: (faceId: number, activated: boolean) => Promise<{ activated: boolean }>;
     };
   }
 }
+
+type FaceFeaturesState = {
+  features: FontFeature[];
+  axes: FontVariationAxis[];
+};
+
+type FaceSettingsState = {
+  featureStates: Record<string, boolean>;
+  axisValues: Record<string, number>;
+};
 
 const buildFontFaceRule = (face: LibraryFace) => {
   const src = `fontman://font?path=${encodeURIComponent(face.filePath)}`;
@@ -51,7 +65,11 @@ const App = () => {
   const [isScanning, setIsScanning] = useState(false);
   const [activationUpdate, setActivationUpdate] = useState(false);
   const [selectedFamilyId, setSelectedFamilyId] = useState<number | null>(null);
+  const [selectedFaceId, setSelectedFaceId] = useState<number | null>(null);
   const [searchText, setSearchText] = useState('');
+  const [openTypePanelOpen, setOpenTypePanelOpen] = useState(false);
+  const [faceFeatures, setFaceFeatures] = useState<Record<number, FaceFeaturesState>>({});
+  const [faceSettings, setFaceSettings] = useState<Record<number, FaceSettingsState>>({});
   const [facetFilters, setFacetFilters] = useState<
     Record<
       number,
@@ -165,6 +183,12 @@ const App = () => {
     () => families.find((family) => family.id === selectedFamilyId) ?? null,
     [families, selectedFamilyId],
   );
+  const selectedFace = useMemo(() => {
+    if (!selectedFamily || selectedFaceId == null) {
+      return null;
+    }
+    return selectedFamily.faces.find((face) => face.id === selectedFaceId) ?? null;
+  }, [selectedFamily, selectedFaceId]);
 
   const handleFamilyFacetUpdate = async (familyId: number, valueIds: number[]) => {
     await window.fontman.setFamilyFacetValues(familyId, valueIds);
@@ -189,6 +213,24 @@ const App = () => {
     await handleFamilyFacetUpdate(family.id, next);
   };
 
+  useEffect(() => {
+    if (!selectedFamily) {
+      setSelectedFaceId(null);
+      return;
+    }
+    const faceIds = selectedFamily.faces.map((face) => face.id);
+    if (selectedFaceId == null || !faceIds.includes(selectedFaceId)) {
+      setSelectedFaceId(selectedFamily.faces[0]?.id ?? null);
+    }
+  }, [selectedFamily, selectedFaceId]);
+
+  useEffect(() => {
+    if (!selectedFace) {
+      return;
+    }
+    ensureFaceFeatures(selectedFace);
+  }, [selectedFace]);
+
   const handleToggleBooleanFacet = async (family: LibraryFamily, column: FacetColumn) => {
     const valueId = column.values[0]?.id;
     if (!valueId) {
@@ -203,6 +245,61 @@ const App = () => {
     const faces = families.flatMap((family) => family.faces);
     return faces.map(buildFontFaceRule).join('\n');
   }, [families]);
+
+  const buildFeatureSettings = (faceId: number) => {
+    const settings = faceSettings[faceId];
+    if (!settings) {
+      return undefined;
+    }
+    const enabledEntries = Object.entries(settings.featureStates).filter(([, enabled]) => enabled);
+    if (enabledEntries.length === 0) {
+      return '"liga" 1';
+    }
+    return enabledEntries.map(([tag]) => `"${tag}" 1`).join(', ');
+  };
+
+  const buildVariationSettings = (faceId: number) => {
+    const settings = faceSettings[faceId];
+    if (!settings) {
+      return undefined;
+    }
+    const entries = Object.entries(settings.axisValues);
+    if (entries.length === 0) {
+      return undefined;
+    }
+    return entries.map(([tag, value]) => `"${tag}" ${value}`).join(', ');
+  };
+
+  const ensureFaceFeatures = async (face: LibraryFace) => {
+    if (faceFeatures[face.id]) {
+      return;
+    }
+    const result = await window.fontman.getFaceFeatures(face.filePath, face.indexInCollection);
+    setFaceFeatures((current) => ({
+      ...current,
+      [face.id]: { features: result.features, axes: result.axes },
+    }));
+    setFaceSettings((current) => {
+      if (current[face.id]) {
+        return current;
+      }
+      const featureStates: Record<string, boolean> = {};
+      for (const feature of result.features) {
+        featureStates[feature.tag] = feature.enabledByDefault;
+      }
+      const axisValues: Record<string, number> = {};
+      for (const axis of result.axes) {
+        axisValues[axis.tag] = axis.defaultValue;
+      }
+      return {
+        ...current,
+        [face.id]: {
+          featureStates,
+          axisValues,
+        },
+      };
+    });
+  };
 
   const filteredFamilies = useMemo(() => {
     const normalizedSearch = searchText.trim().toLowerCase();
@@ -386,6 +483,17 @@ const App = () => {
                       <span>{face.styleName}</span>
                       <button
                         type="button"
+                        className={`inspector__select${selectedFace?.id === face.id ? ' is-active' : ''}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setSelectedFaceId(face.id);
+                          ensureFaceFeatures(face);
+                        }}
+                      >
+                        {selectedFace?.id === face.id ? 'Selected' : 'Select'}
+                      </button>
+                      <button
+                        type="button"
                         disabled={!face.installSupported || activationUpdate}
                         onClick={(event) => {
                           event.stopPropagation();
@@ -508,9 +616,98 @@ const App = () => {
                 onChange={(event) => setSearchText(event.target.value)}
               />
             </label>
+            <button type="button" onClick={() => setOpenTypePanelOpen((current) => !current)}>
+              {openTypePanelOpen ? 'Hide OpenType' : 'Show OpenType'}
+            </button>
           </div>
 
           <style>{fontFaceStyles}</style>
+
+          {openTypePanelOpen && (
+            <section className="opentype-panel">
+              <div className="opentype-panel__header">
+                <h3>OpenType + Variations</h3>
+                <p className="opentype-panel__meta">
+                  {selectedFace ? `${selectedFamily?.familyName} · ${selectedFace.styleName}` : 'Select a face to edit features.'}
+                </p>
+              </div>
+              {selectedFace && (
+                <div className="opentype-panel__content">
+                  <div className="opentype-panel__group">
+                    <h4>Features</h4>
+                    {faceFeatures[selectedFace.id]?.features.length ? (
+                      <div className="opentype-panel__grid">
+                        {faceFeatures[selectedFace.id]?.features.map((feature) => (
+                          <label key={feature.tag} className="opentype-panel__option">
+                            <input
+                              type="checkbox"
+                              checked={faceSettings[selectedFace.id]?.featureStates[feature.tag] ?? false}
+                              onChange={() => {
+                                setFaceSettings((current) => ({
+                                  ...current,
+                                  [selectedFace.id]: {
+                                    featureStates: {
+                                      ...current[selectedFace.id]?.featureStates,
+                                      [feature.tag]:
+                                        !(current[selectedFace.id]?.featureStates?.[feature.tag] ?? false),
+                                    },
+                                    axisValues: current[selectedFace.id]?.axisValues ?? {},
+                                  },
+                                }));
+                              }}
+                            />
+                            <span>{feature.name}</span>
+                            <span className="opentype-panel__tag">{feature.tag}</span>
+                          </label>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="opentype-panel__empty">No OpenType features reported.</p>
+                    )}
+                  </div>
+                  <div className="opentype-panel__group">
+                    <h4>Variable Axes</h4>
+                    {faceFeatures[selectedFace.id]?.axes.length ? (
+                      <div className="opentype-panel__axes">
+                        {faceFeatures[selectedFace.id]?.axes.map((axis) => (
+                          <label key={axis.tag} className="opentype-panel__axis">
+                            <span className="opentype-panel__axis-name">
+                              {axis.name} <span className="opentype-panel__tag">{axis.tag}</span>
+                            </span>
+                            <input
+                              type="range"
+                              min={axis.min}
+                              max={axis.max}
+                              step="1"
+                              value={faceSettings[selectedFace.id]?.axisValues[axis.tag] ?? axis.defaultValue}
+                              onChange={(event) => {
+                                const nextValue = Number(event.target.value);
+                                setFaceSettings((current) => ({
+                                  ...current,
+                                  [selectedFace.id]: {
+                                    featureStates: current[selectedFace.id]?.featureStates ?? {},
+                                    axisValues: {
+                                      ...current[selectedFace.id]?.axisValues,
+                                      [axis.tag]: nextValue,
+                                    },
+                                  },
+                                }));
+                              }}
+                            />
+                            <span className="opentype-panel__axis-value">
+                              {faceSettings[selectedFace.id]?.axisValues[axis.tag]?.toFixed(0) ?? axis.defaultValue.toFixed(0)}
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="opentype-panel__empty">No variable axes detected.</p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
 
           <section className="family-grid">
             {filteredFamilies.map((family) => (
@@ -525,20 +722,37 @@ const App = () => {
                 </div>
                 <div className="family-card__faces">
                   {family.faces.map((face) => (
-                    <div key={face.id} className="face-tile">
+                    <div
+                      key={face.id}
+                      className={`face-tile${selectedFaceId === face.id ? ' face-tile--selected' : ''}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setSelectedFamilyId(family.id);
+                        setSelectedFaceId(face.id);
+                        ensureFaceFeatures(face);
+                      }}
+                    >
                       <p className="face-tile__name">{face.fullName}</p>
                       <p className="face-tile__style">{face.styleName}</p>
                       <button
                         type="button"
                         className="face-tile__toggle"
                         disabled={!face.installSupported || activationUpdate}
-                        onClick={() => handleToggleActivation(face)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleToggleActivation(face);
+                        }}
                       >
                         {face.activated ? 'Deactivate' : 'Activate'}
                       </button>
                       <div
                         className="face-tile__preview"
-                        style={{ fontFamily: `face_${face.id}`, fontSize }}
+                        style={{
+                          fontFamily: `face_${face.id}`,
+                          fontSize,
+                          fontFeatureSettings: buildFeatureSettings(face.id),
+                          fontVariationSettings: buildVariationSettings(face.id),
+                        }}
                       >
                         {sampleText}
                       </div>

@@ -4,6 +4,7 @@ import type {
   LibraryFamily,
   LibrarySource,
   FacetColumn,
+  FaceFeaturesResult,
 } from '@fontman/shared/src/protocol';
 
 const api = {
@@ -16,6 +17,8 @@ const api = {
     ipcRenderer.invoke('sources:scan', sourceId),
   listFamilies: (): Promise<LibraryFamily[]> => ipcRenderer.invoke('library:listFamilies'),
   listFacets: (): Promise<FacetColumn[]> => ipcRenderer.invoke('facets:list'),
+  getFaceFeatures: (path: string, index: number): Promise<FaceFeaturesResult> =>
+    ipcRenderer.invoke('faces:getFeatures', path, index),
   setFamilyFacetValues: (familyId: number, valueIds: number[]): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('facets:setFamilyValues', familyId, valueIds),
   setFaceActivated: (faceId: number, activated: boolean): Promise<{ activated: boolean }> =>
