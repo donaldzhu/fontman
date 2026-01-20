@@ -317,8 +317,15 @@ export class LibraryStore {
     const fileRow = this.db.prepare('SELECT id, activated_bool as activated FROM font_files WHERE path = ?').get(
       filePath,
     ) as { id: number; activated: number };
+    const faceActivationRow = this.db
+      .prepare('SELECT COUNT(1) as activeCount FROM faces WHERE file_id = ? AND activated_bool = 1')
+      .get(fileRow.id) as { activeCount: number };
+    const hadActiveFaces = faceActivationRow.activeCount > 0;
+    if (hadActiveFaces && !fileRow.activated) {
+      this.db.prepare('UPDATE font_files SET activated_bool = 1 WHERE id = ?').run(fileRow.id);
+    }
     this.db.prepare('DELETE FROM faces WHERE file_id = ?').run(fileRow.id);
-    const shouldActivate = Boolean(fileRow.activated);
+    const shouldActivate = Boolean(fileRow.activated || hadActiveFaces);
     for (const face of scanResult.faces) {
       const familyKey = normalizeFamilyKey(face.familyName);
       this.db
