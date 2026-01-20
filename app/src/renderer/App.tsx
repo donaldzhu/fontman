@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
   LibraryFamily,
   LibraryFace,
@@ -128,6 +128,7 @@ const App = () => {
   const [previewRenders, setPreviewRenders] = useState<
     Record<number, { key: string; dataUrl: string }>
   >({})
+  const [fitScale, setFitScale] = useState(1)
   const [facetFilters, setFacetFilters] = useState<
     Record<
       number,
@@ -136,6 +137,8 @@ const App = () => {
       | { type: 'boolean'; state: 'any' | 'yes' | 'no' }
     >
   >({})
+  const contentRef = useRef<HTMLElement | null>(null)
+  const gridRef = useRef<HTMLElement | null>(null)
 
   const refreshSources = async () => {
     const data = await window.fontman.listSources()
@@ -186,6 +189,68 @@ const App = () => {
       return next
     })
   }, [facetColumns])
+
+  useEffect(() => {
+    let timeoutId: number | null = null
+    let rafId: number | null = null
+
+    const measureFitScale = () => {
+      const container = contentRef.current
+      const grid = gridRef.current
+      if (!container || !grid) {
+        setFitScale(1)
+        return
+      }
+
+      const containerRect = container.getBoundingClientRect()
+      const previews = Array.from(grid.querySelectorAll<HTMLElement>('.family-tile__preview-text'))
+      let maxRatio = 1
+
+      for (const preview of previews) {
+        const rect = preview.getBoundingClientRect()
+        if (rect.bottom < containerRect.top || rect.top > containerRect.bottom) {
+          continue
+        }
+        const clientWidth = preview.clientWidth
+        const scrollWidth = preview.scrollWidth
+        if (clientWidth > 0 && scrollWidth > clientWidth) {
+          maxRatio = Math.max(maxRatio, scrollWidth / clientWidth)
+        }
+      }
+
+      const nextScale = maxRatio > 1 ? Math.min(1, 1 / maxRatio) : 1
+      setFitScale((current) => (Math.abs(current - nextScale) < 0.01 ? current : nextScale))
+    }
+
+    const scheduleMeasure = () => {
+      if (timeoutId) {
+        window.clearTimeout(timeoutId)
+      }
+      timeoutId = window.setTimeout(() => {
+        if (rafId) {
+          window.cancelAnimationFrame(rafId)
+        }
+        rafId = window.requestAnimationFrame(measureFitScale)
+      }, 150)
+    }
+
+    scheduleMeasure()
+
+    const container = contentRef.current
+    container?.addEventListener('scroll', scheduleMeasure, { passive: true })
+    window.addEventListener('resize', scheduleMeasure)
+
+    return () => {
+      if (timeoutId) {
+        window.clearTimeout(timeoutId)
+      }
+      if (rafId) {
+        window.cancelAnimationFrame(rafId)
+      }
+      container?.removeEventListener('scroll', scheduleMeasure)
+      window.removeEventListener('resize', scheduleMeasure)
+    }
+  }, [filteredFamilies, fontSize, sampleText, faceSettings])
 
   const handleChooseLibrary = async () => {
     const root = await window.fontman.chooseLibraryRoot()
@@ -750,7 +815,7 @@ const App = () => {
           </div>
         </aside>
 
-        <main className="content">
+        <main className="content" ref={contentRef}>
           <div className="content__toolbar">
             <label className="content__label">
               Sample text
@@ -873,7 +938,7 @@ const App = () => {
             </section>
           )}
 
-          <section className="family-grid">
+          <section className="family-grid" ref={gridRef}>
             {filteredFamilies.map((family) => (
               (() => {
                 const representative = representativeFaces.get(family.id)
@@ -924,7 +989,9 @@ const App = () => {
                       fontVariationSettings: buildVariationSettings(representative.id),
                     }}
                   >
-                    {sampleText}
+                    <span className="family-tile__preview-text" style={{ transform: `scale(${fitScale})` }}>
+                      {sampleText}
+                    </span>
                   </div>
                 )}
                 <div className="family-tile__footer">

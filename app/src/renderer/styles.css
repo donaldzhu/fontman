@@ -449,6 +449,11 @@ button:hover {
   min-height: 36px;
 }
 
+.family-tile__preview-text {
+  display: block;
+  transform-origin: left center;
+}
+
 .family-tile__preview--raster {
   display: flex;
   align-items: center;
