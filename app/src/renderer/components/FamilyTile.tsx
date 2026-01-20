@@ -8,6 +8,13 @@ export type FamilyGridItem = {
   faceCount: number
   /** CSS font-family name to use for preview. (In your app this should match loaded faces.) */
   cssFontFamily: string
+  previewFont?: {
+    id: string
+    family: string
+    sourceUrl: string
+    weight?: string
+    style?: string
+  }
   activation: ActivationState
 }
 
@@ -17,6 +24,7 @@ type Props = {
   targetFontSizePx: number
   fitScale: number
   registerPreviewEl: (key: string) => (el: HTMLElement | null) => void
+  registerTileEl: (key: string) => (el: HTMLElement | null) => void
   onSelect?: (familyId: string) => void
 }
 
@@ -37,12 +45,14 @@ export default function FamilyTile({
   targetFontSizePx,
   fitScale,
   registerPreviewEl,
+  registerTileEl,
   onSelect,
 }: Props) {
   return (
     <button
       type="button"
       className="familyTile"
+      ref={registerTileEl(item.id)}
       onClick={() => onSelect?.(item.id)}
       title={`${item.familyName} — ${item.faceCount} faces`}
     >
