@@ -10,7 +10,7 @@ import type {
 } from '@fontman/shared/src/protocol'
 
 type PingStatus = {
-  ok: boolean
+  status: 'unknown' | 'connected' | 'disconnected'
   version?: string
   error?: string
 }
@@ -111,7 +111,7 @@ const getRepresentativeFace = (family: LibraryFamily) => {
 
 const App = () => {
   const [libraryRoot, setLibraryRoot] = useState<string | null>(null)
-  const [pingStatus, setPingStatus] = useState<PingStatus>({ ok: false })
+  const [pingStatus, setPingStatus] = useState<PingStatus>({ status: 'unknown' })
   const [sources, setSources] = useState<LibrarySource[]>([])
   const [families, setFamilies] = useState<LibraryFamily[]>([])
   const [facetColumns, setFacetColumns] = useState<FacetColumn[]>([])
@@ -152,11 +152,21 @@ const App = () => {
     setFacetColumns(data)
   }
 
+  const handlePing = async () => {
+    try {
+      const result = await window.fontman.pingHelper()
+      setPingStatus({ status: 'connected', version: result.version })
+    } catch (error) {
+      setPingStatus({ status: 'disconnected', error: (error as Error).message })
+    }
+  }
+
   useEffect(() => {
     window.fontman.getLibraryRoot().then(setLibraryRoot)
     refreshSources()
     refreshFamilies()
     refreshFacets()
+    void handlePing()
   }, [])
 
   useEffect(() => {
@@ -185,15 +195,6 @@ const App = () => {
     await refreshFacets()
   }
 
-  const handlePing = async () => {
-    try {
-      const result = await window.fontman.pingHelper()
-      setPingStatus({ ok: result.ok, version: result.version })
-    } catch (error) {
-      setPingStatus({ ok: false, error: (error as Error).message })
-    }
-  }
-
   const handleAddSource = async () => {
     setIsScanning(true)
     await window.fontman.addSource()
@@ -215,6 +216,13 @@ const App = () => {
     await refreshFamilies()
     setActivationUpdate(false)
   }
+
+  const pingDotClass =
+    pingStatus.status === 'connected'
+      ? 'ping-dot ping-dot--ok'
+      : pingStatus.status === 'disconnected'
+        ? 'ping-dot ping-dot--error'
+        : 'ping-dot ping-dot--unknown'
 
   const updateFacetFilter = (
     columnId: number,
@@ -523,6 +531,7 @@ const App = () => {
             Choose Library Root
           </button>
           <button type="button" onClick={handlePing}>
+            <span className={pingDotClass} aria-hidden="true" />
             Ping Helper
           </button>
         </div>
@@ -551,14 +560,6 @@ const App = () => {
               ))}
             </ul>
             {sources.length === 0 && <p className="sidebar__empty">No sources yet.</p>}
-          </div>
-          <div className="sidebar__status">
-            <h3>Helper Status</h3>
-            {pingStatus.ok ? (
-              <p>Connected (version {pingStatus.version})</p>
-            ) : (
-              <p>{pingStatus.error ?? 'Not connected'}</p>
-            )}
           </div>
           <div className="sidebar__section">
             <h3>Facet Filters</h3>
