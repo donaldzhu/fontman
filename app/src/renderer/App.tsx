@@ -24,11 +24,21 @@ declare global {
 }
 
 const STYLE_PRIORITY = ['regular', 'book', 'medium', 'roman', 'normal']
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
 
 const resolveStyleRank = (face: LibraryFace) => {
   const styleName = face.styleName?.toLowerCase() ?? ''
   const index = STYLE_PRIORITY.findIndex((style) => styleName.includes(style))
   return index === -1 ? STYLE_PRIORITY.length : index
+}
+
+const toCssWeight = (weight?: number | null) => {
+  if (weight === null || weight === undefined || Number.isNaN(weight)) {
+    return undefined
+  }
+  const normalized = clamp(weight, -1, 1)
+  const cssWeight = Math.round((normalized + 1) * 400 + 100)
+  return String(cssWeight)
 }
 
 const chooseRepresentativeFace = (faces: LibraryFace[]) => {
@@ -152,7 +162,7 @@ export default function App() {
                 id: String(representative.id),
                 family: previewFamilyName,
                 sourceUrl: `fontman://font?path=${encodeURIComponent(representative.filePath)}`,
-                weight: representative.weight ? String(representative.weight) : undefined,
+                weight: toCssWeight(representative.weight),
                 style: representative.isItalic ? 'italic' : 'normal',
               }
             : undefined
