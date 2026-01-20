@@ -81,6 +81,7 @@ export class LibraryStore {
         mtime INTEGER NOT NULL,
         last_seen_at TEXT NOT NULL,
         status TEXT NOT NULL,
+        activated_bool INTEGER NOT NULL DEFAULT 0,
         FOREIGN KEY(source_id) REFERENCES sources(id)
       );
 
@@ -145,6 +146,19 @@ export class LibraryStore {
       CREATE INDEX IF NOT EXISTS idx_family_facet_family ON family_facet_values(family_id);
       CREATE INDEX IF NOT EXISTS idx_family_facet_value ON family_facet_values(value_id);
     `);
+
+    const fontFileColumns = this.db
+      .prepare(`PRAGMA table_info(font_files)`)
+      .all() as { name: string }[];
+    const hasActivatedColumn = fontFileColumns.some((column) => column.name === 'activated_bool');
+    if (!hasActivatedColumn) {
+      this.db.exec(`ALTER TABLE font_files ADD COLUMN activated_bool INTEGER NOT NULL DEFAULT 0`);
+      this.db.exec(`
+        UPDATE font_files
+        SET activated_bool = 1
+        WHERE id IN (SELECT DISTINCT file_id FROM faces WHERE activated_bool = 1)
+      `);
+    }
   }
 
   syncFacetSchema(schema: FacetSchemaFile) {
@@ -300,10 +314,11 @@ export class LibraryStore {
            status = 'ok'`,
       )
       .run(sourceId, filePath, ext, stats.size, stats.mtimeMs, lastSeenAt);
-    const fileRow = this.db.prepare('SELECT id FROM font_files WHERE path = ?').get(filePath) as {
-      id: number;
-    };
+    const fileRow = this.db.prepare('SELECT id, activated_bool as activated FROM font_files WHERE path = ?').get(
+      filePath,
+    ) as { id: number; activated: number };
     this.db.prepare('DELETE FROM faces WHERE file_id = ?').run(fileRow.id);
+    const shouldActivate = Boolean(fileRow.activated);
     for (const face of scanResult.faces) {
       const familyKey = normalizeFamilyKey(face.familyName);
       this.db
@@ -333,9 +348,10 @@ export class LibraryStore {
             is_italic,
             is_variable,
             axes_json,
+            activated_bool,
             preview_supported_bool,
             install_supported_bool
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           familyRow.id,
@@ -350,6 +366,7 @@ export class LibraryStore {
           face.isItalic ? 1 : 0,
           face.isVariable ? 1 : 0,
           null,
+          shouldActivate ? 1 : 0,
           previewSupported,
           installSupported,
         );
@@ -562,13 +579,14 @@ export class LibraryStore {
            faces.file_id as fileId,
            faces.install_supported_bool as installSupported,
            font_files.path as filePath,
-           font_files.status as status
+           font_files.status as status,
+           font_files.activated_bool as fileActivated
          FROM faces
          JOIN font_files ON font_files.id = faces.file_id
          WHERE faces.id = ?`,
       )
       .get(faceId) as
-      | { fileId: number; installSupported: number; filePath: string; status: string }
+      | { fileId: number; installSupported: number; filePath: string; status: string; fileActivated: number }
       | undefined;
     if (!faceRow) {
       return null;
@@ -583,12 +601,11 @@ export class LibraryStore {
         activated: false,
       };
     }
-    this.db.prepare('UPDATE faces SET activated_bool = ? WHERE id = ?').run(activated ? 1 : 0, faceId);
-    const activeCount = this.db
-      .prepare('SELECT COUNT(*) as count FROM faces WHERE file_id = ? AND activated_bool = 1')
-      .get(faceRow.fileId) as { count: number };
-    const shouldRegister = activated && activeCount.count === 1;
-    const shouldUnregister = !activated && activeCount.count === 0;
+    this.db.prepare('UPDATE font_files SET activated_bool = ? WHERE id = ?').run(activated ? 1 : 0, faceRow.fileId);
+    this.db.prepare('UPDATE faces SET activated_bool = ? WHERE file_id = ?').run(activated ? 1 : 0, faceRow.fileId);
+    const wasActivated = Boolean(faceRow.fileActivated);
+    const shouldRegister = activated && !wasActivated;
+    const shouldUnregister = !activated && wasActivated;
     return {
       filePath: faceRow.filePath,
       installSupported: true,
@@ -612,7 +629,7 @@ export class LibraryStore {
            font_files.path as filePath,
            font_files.status as status,
            MAX(faces.install_supported_bool) as installSupported,
-           SUM(faces.activated_bool) as activatedCount
+           font_files.activated_bool as activatedCount
          FROM font_files
          JOIN faces ON faces.file_id = font_files.id
          GROUP BY font_files.id`,

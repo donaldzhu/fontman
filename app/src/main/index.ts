@@ -68,6 +68,17 @@ const loadFacetSchema = async (libraryRoot: string) => {
   libraryStore.syncFacetSchema(schema)
 }
 
+const removeLibraryRootSource = (libraryRoot: string) => {
+  if (!libraryStore) {
+    return
+  }
+  const sources = libraryStore.listSources()
+  const match = sources.find((source) => source.path === libraryRoot)
+  if (match) {
+    libraryStore.removeSource(match.id)
+  }
+}
+
 const chooseLibraryRoot = async (): Promise<string | null> => {
   const result = await dialog.showOpenDialog({
     title: 'Choose Font Library Folder',
@@ -80,6 +91,7 @@ const chooseLibraryRoot = async (): Promise<string | null> => {
   await writeLibraryRootPointer(selected)
   libraryStore = new LibraryStore(selected)
   await loadFacetSchema(selected)
+  removeLibraryRootSource(selected)
   return selected
 }
 
@@ -375,6 +387,7 @@ app.whenReady().then(async () => {
   }
   libraryStore = new LibraryStore(libraryRoot)
   await loadFacetSchema(libraryRoot)
+  removeLibraryRootSource(libraryRoot)
   await startHelper()
   await syncHelperSources()
   await reconcileActivationState()

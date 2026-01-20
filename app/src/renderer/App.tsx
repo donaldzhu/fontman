@@ -9,8 +9,10 @@ import type {
   FontVariationAxis,
 } from '@fontman/shared/src/protocol'
 
+type PingState = 'unknown' | 'connected' | 'disconnected'
+
 type PingStatus = {
-  ok: boolean
+  state: PingState
   version?: string
   error?: string
 }
@@ -62,9 +64,56 @@ const buildFontFaceRule = (face: LibraryFace) => {
   `
 }
 
+const STYLE_PREFERENCE = ['regular', 'book', 'medium', 'roman', 'normal']
+
+const normalizeStyleName = (styleName: string) => styleName.toLowerCase().trim()
+
+const getStyleRank = (styleName: string) => {
+  const normalized = normalizeStyleName(styleName)
+  const parts = normalized.split(/[\s-_]+/)
+  for (let index = 0; index < STYLE_PREFERENCE.length; index += 1) {
+    const target = STYLE_PREFERENCE[index]
+    if (parts.includes(target) || normalized === target) {
+      return index
+    }
+  }
+  return STYLE_PREFERENCE.length
+}
+
+const isItalicStyle = (face: LibraryFace) =>
+  face.isItalic || normalizeStyleName(face.styleName).includes('italic')
+
+const getRepresentativeFace = (family: LibraryFamily) => {
+  const faces = [...family.faces]
+  faces.sort((a, b) => {
+    const styleRank = getStyleRank(a.styleName) - getStyleRank(b.styleName)
+    if (styleRank !== 0) {
+      return styleRank
+    }
+    const italicRank = Number(isItalicStyle(a)) - Number(isItalicStyle(b))
+    if (italicRank !== 0) {
+      return italicRank
+    }
+    const weightRank = (a.weight ?? Number.MAX_SAFE_INTEGER) - (b.weight ?? Number.MAX_SAFE_INTEGER)
+    if (weightRank !== 0) {
+      return weightRank
+    }
+    const widthRank = (a.width ?? Number.MAX_SAFE_INTEGER) - (b.width ?? Number.MAX_SAFE_INTEGER)
+    if (widthRank !== 0) {
+      return widthRank
+    }
+    const italicFallback = Number(isItalicStyle(a)) - Number(isItalicStyle(b))
+    if (italicFallback !== 0) {
+      return italicFallback
+    }
+    return a.id - b.id
+  })
+  return faces[0] ?? null
+}
+
 const App = () => {
   const [libraryRoot, setLibraryRoot] = useState<string | null>(null)
-  const [pingStatus, setPingStatus] = useState<PingStatus>({ ok: false })
+  const [pingStatus, setPingStatus] = useState<PingStatus>({ state: 'unknown' })
   const [sources, setSources] = useState<LibrarySource[]>([])
   const [families, setFamilies] = useState<LibraryFamily[]>([])
   const [facetColumns, setFacetColumns] = useState<FacetColumn[]>([])
@@ -110,6 +159,7 @@ const App = () => {
     refreshSources()
     refreshFamilies()
     refreshFacets()
+    void handlePing()
   }, [])
 
   useEffect(() => {
@@ -141,9 +191,9 @@ const App = () => {
   const handlePing = async () => {
     try {
       const result = await window.fontman.pingHelper()
-      setPingStatus({ ok: result.ok, version: result.version })
+      setPingStatus({ state: 'connected', version: result.version })
     } catch (error) {
-      setPingStatus({ ok: false, error: (error as Error).message })
+      setPingStatus({ state: 'disconnected', error: (error as Error).message })
     }
   }
 
@@ -201,6 +251,17 @@ const App = () => {
     return selectedFamily.faces.find((face) => face.id === selectedFaceId) ?? null
   }, [selectedFamily, selectedFaceId])
 
+  const representativeFaces = useMemo(() => {
+    const map = new Map<number, LibraryFace>()
+    for (const family of families) {
+      const representative = getRepresentativeFace(family)
+      if (representative) {
+        map.set(family.id, representative)
+      }
+    }
+    return map
+  }, [families])
+
   const handleFamilyFacetUpdate = async (familyId: number, valueIds: number[]) => {
     await window.fontman.setFamilyFacetValues(familyId, valueIds)
     await refreshFamilies()
@@ -231,7 +292,8 @@ const App = () => {
     }
     const faceIds = selectedFamily.faces.map((face) => face.id)
     if (selectedFaceId == null || !faceIds.includes(selectedFaceId)) {
-      setSelectedFaceId(selectedFamily.faces[0]?.id ?? null)
+      const representative = getRepresentativeFace(selectedFamily)
+      setSelectedFaceId(representative?.id ?? selectedFamily.faces[0]?.id ?? null)
     }
   }, [selectedFamily, selectedFaceId])
 
@@ -407,7 +469,9 @@ const App = () => {
   useEffect(() => {
     let cancelled = false
     const run = async () => {
-      const faces = filteredFamilies.flatMap((family) => family.faces)
+      const faces = filteredFamilies
+        .map((family) => representativeFaces.get(family.id))
+        .filter((face): face is LibraryFace => Boolean(face))
       for (const face of faces) {
         if (!isCollectionFace(face) || !face.previewSupported) {
           continue
@@ -447,7 +511,7 @@ const App = () => {
     return () => {
       cancelled = true
     }
-  }, [filteredFamilies, sampleText, fontSize, faceSettings, faceFeatures, previewRenders])
+  }, [filteredFamilies, sampleText, fontSize, faceSettings, faceFeatures, previewRenders, representativeFaces])
 
   return (
     <div className="app">
@@ -461,10 +525,8 @@ const App = () => {
           <button type="button" onClick={handleChooseLibrary}>
             Choose Library Root
           </button>
-          <button type="button" onClick={handleAddSource} disabled={isScanning}>
-            {isScanning ? 'Scanning…' : 'Add Source'}
-          </button>
           <button type="button" onClick={handlePing}>
+            <span className={`ping-indicator ping-indicator--${pingStatus.state}`} />
             Ping Helper
           </button>
         </div>
@@ -472,28 +534,27 @@ const App = () => {
 
       <div className="app__layout">
         <aside className="sidebar">
-          <h2>Sources</h2>
-          <ul className="sidebar__list">
-            {sources.map((source) => (
-              <li key={source.id} className="sidebar__item">
-                <div>
-                  <p className="sidebar__path">{source.path}</p>
-                  <p className="sidebar__meta">Added {new Date(source.createdAt).toLocaleString()}</p>
-                </div>
-                <button type="button" onClick={() => handleScanSource(source.id)} disabled={isScanning}>
-                  Rescan
-                </button>
-              </li>
-            ))}
-          </ul>
-          {sources.length === 0 && <p className="sidebar__empty">No sources yet.</p>}
-          <div className="sidebar__status">
-            <h3>Helper Status</h3>
-            {pingStatus.ok ? (
-              <p>Connected (version {pingStatus.version})</p>
-            ) : (
-              <p>{pingStatus.error ?? 'Not connected'}</p>
-            )}
+          <div className="sidebar__section sidebar__section--sources">
+            <div className="sidebar__section-header">
+              <h2>Sources</h2>
+              <button type="button" onClick={handleAddSource} disabled={isScanning}>
+                {isScanning ? 'Scanning…' : 'Add Source'}
+              </button>
+            </div>
+            <ul className="sidebar__list">
+              {sources.map((source) => (
+                <li key={source.id} className="sidebar__item">
+                  <div>
+                    <p className="sidebar__path">{source.path}</p>
+                    <p className="sidebar__meta">Added {new Date(source.createdAt).toLocaleString()}</p>
+                  </div>
+                  <button type="button" onClick={() => handleScanSource(source.id)} disabled={isScanning}>
+                    Rescan
+                  </button>
+                </li>
+              ))}
+            </ul>
+            {sources.length === 0 && <p className="sidebar__empty">No sources yet.</p>}
           </div>
           <div className="sidebar__section">
             <h3>Facet Filters</h3>
@@ -588,7 +649,7 @@ const App = () => {
                           void ensureFaceFeatures(face)
                         }}
                       >
-                        {selectedFace?.id === face.id ? 'Selected' : 'Select'}
+                        Select
                       </button>
                       <button
                         type="button"
@@ -809,69 +870,64 @@ const App = () => {
 
           <section className="family-grid">
             {filteredFamilies.map((family) => (
+              (() => {
+                const representative = representativeFaces.get(family.id)
+                if (!representative) {
+                  return null
+                }
+                const activeCount = family.faces.filter((face) => face.activated).length
+                const activationState =
+                  activeCount === 0
+                    ? 'inactive'
+                    : activeCount === family.faces.length
+                      ? 'active'
+                      : 'partial'
+                return (
               <div
                 key={family.id}
-                className={`family-card${selectedFamilyId === family.id ? ' family-card--selected' : ''}`}
+                className={`family-tile${selectedFamilyId === family.id ? ' family-tile--selected' : ''}`}
                 onClick={() => setSelectedFamilyId(family.id)}
+                onDoubleClick={() => undefined}
               >
-                <div className="family-card__header">
-                  <h2>{family.familyName}</h2>
+                <div className="family-tile__header">
+                  <div>
+                    <p className="family-tile__name">{family.familyName}</p>
+                    <p className="family-tile__meta">{representative.styleName}</p>
+                  </div>
+                  <span className={`family-tile__status family-tile__status--${activationState}`} />
+                </div>
+                {isCollectionFace(representative) && representative.previewSupported ? (
+                  <div className="family-tile__preview family-tile__preview--raster">
+                    {previewRenders[representative.id]?.key ===
+                    buildPreviewKey(representative.id, faceFeatures[representative.id]) ? (
+                      <img
+                        src={previewRenders[representative.id]?.dataUrl}
+                        alt={`${family.familyName} preview`}
+                        className="family-tile__preview-image"
+                      />
+                    ) : (
+                      <span className="family-tile__preview-placeholder">Rendering preview…</span>
+                    )}
+                  </div>
+                ) : (
+                  <div
+                    className="family-tile__preview"
+                    style={{
+                      fontFamily: `face_${representative.id}`,
+                      fontSize,
+                      fontFeatureSettings: buildFeatureSettings(representative.id),
+                      fontVariationSettings: buildVariationSettings(representative.id),
+                    }}
+                  >
+                    {sampleText}
+                  </div>
+                )}
+                <div className="family-tile__footer">
                   <span>{family.faces.length} faces</span>
                 </div>
-                <div className="family-card__faces">
-                  {family.faces.map((face) => (
-                    <div
-                      key={face.id}
-                      className={`face-tile${selectedFaceId === face.id ? ' face-tile--selected' : ''}`}
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        setSelectedFamilyId(family.id)
-                        setSelectedFaceId(face.id)
-                        void ensureFaceFeatures(face)
-                      }}
-                    >
-                      <p className="face-tile__name">{face.fullName}</p>
-                      <p className="face-tile__style">{face.styleName}</p>
-                      <button
-                        type="button"
-                        className="face-tile__toggle"
-                        disabled={!face.installSupported || activationUpdate}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          handleToggleActivation(face)
-                        }}
-                      >
-                        {face.activated ? 'Deactivate' : 'Activate'}
-                      </button>
-                      {isCollectionFace(face) && face.previewSupported ? (
-                        <div className="face-tile__preview face-tile__preview--raster">
-                          {previewRenders[face.id]?.key === buildPreviewKey(face.id, faceFeatures[face.id]) ? (
-                            <img
-                              src={previewRenders[face.id]?.dataUrl}
-                              alt={`${face.fullName} preview`}
-                              className="face-tile__preview-image"
-                            />
-                          ) : (
-                            <span className="face-tile__preview-placeholder">Rendering preview…</span>
-                          )}
-                        </div>
-                      ) : (
-                        <div
-                          className="face-tile__preview"
-                          style={{
-                            fontFamily: `face_${face.id}`,
-                            fontSize,
-                            fontFeatureSettings: buildFeatureSettings(face.id),
-                            fontVariationSettings: buildVariationSettings(face.id),
-                          }}
-                        >
-                          {sampleText}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
               </div>
+                )
+              })()
             ))}
             {families.length === 0 && (
               <div className="content__empty">
