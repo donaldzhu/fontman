@@ -379,7 +379,9 @@ button:hover {
 .family-grid {
   margin-top: 24px;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fill, max-content);
+  grid-auto-flow: row dense;
+  justify-content: start;
   gap: 16px;
 }
 
@@ -392,6 +394,8 @@ button:hover {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  width: max-content;
+  max-width: 100%;
 }
 
 .family-tile--selected {
@@ -443,10 +447,16 @@ button:hover {
 .family-tile__preview {
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
   font-size: 28px;
   line-height: 1.2;
   min-height: 36px;
+  width: max-content;
+  max-width: 100%;
+}
+
+.family-tile__preview-text {
+  display: inline-block;
+  transform-origin: left center;
 }
 
 .family-tile__preview-text {
