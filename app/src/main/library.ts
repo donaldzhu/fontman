@@ -351,7 +351,7 @@ export class LibraryStore {
             activated_bool,
             preview_supported_bool,
             install_supported_bool
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           familyRow.id,
