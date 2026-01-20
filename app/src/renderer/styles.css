@@ -39,6 +39,32 @@ body {
   flex-wrap: wrap;
 }
 
+.app__actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ping-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #6b7280;
+  box-shadow: 0 0 0 2px #1d2230;
+}
+
+.ping-dot--ok {
+  background: #22c55e;
+}
+
+.ping-dot--error {
+  background: #ef4444;
+}
+
+.ping-dot--unknown {
+  background: #6b7280;
+}
+
 .app__subtle {
   color: #a8b0bd;
   margin: 8px 0 0;
@@ -125,10 +151,6 @@ button:hover {
 .sidebar__empty {
   color: #8b94a6;
   margin: 0;
-}
-
-.sidebar__status h3 {
-  margin: 0 0 6px;
 }
 
 .sidebar__section {
@@ -357,7 +379,9 @@ button:hover {
 .family-grid {
   margin-top: 24px;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fill, max-content);
+  grid-auto-flow: row dense;
+  justify-content: start;
   gap: 16px;
 }
 
@@ -370,6 +394,8 @@ button:hover {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  width: max-content;
+  max-width: 100%;
 }
 
 .family-tile--selected {
@@ -421,10 +447,16 @@ button:hover {
 .family-tile__preview {
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
   font-size: 28px;
   line-height: 1.2;
   min-height: 36px;
+  width: max-content;
+  max-width: 100%;
+}
+
+.family-tile__preview-text {
+  display: inline-block;
+  transform-origin: left center;
 }
 
 .family-tile__preview--raster {
