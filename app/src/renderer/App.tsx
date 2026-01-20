@@ -522,9 +522,6 @@ const App = () => {
           <button type="button" onClick={handleChooseLibrary}>
             Choose Library Root
           </button>
-          <button type="button" onClick={handleAddSource} disabled={isScanning}>
-            {isScanning ? 'Scanning…' : 'Add Source'}
-          </button>
           <button type="button" onClick={handlePing}>
             Ping Helper
           </button>
@@ -533,21 +530,28 @@ const App = () => {
 
       <div className="app__layout">
         <aside className="sidebar">
-          <h2>Sources</h2>
-          <ul className="sidebar__list">
-            {sources.map((source) => (
-              <li key={source.id} className="sidebar__item">
-                <div>
-                  <p className="sidebar__path">{source.path}</p>
-                  <p className="sidebar__meta">Added {new Date(source.createdAt).toLocaleString()}</p>
-                </div>
-                <button type="button" onClick={() => handleScanSource(source.id)} disabled={isScanning}>
-                  Rescan
-                </button>
-              </li>
-            ))}
-          </ul>
-          {sources.length === 0 && <p className="sidebar__empty">No sources yet.</p>}
+          <div className="sidebar__section sidebar__section--sources">
+            <div className="sidebar__section-header">
+              <h2>Sources</h2>
+              <button type="button" onClick={handleAddSource} disabled={isScanning}>
+                {isScanning ? 'Scanning…' : 'Add Source'}
+              </button>
+            </div>
+            <ul className="sidebar__list">
+              {sources.map((source) => (
+                <li key={source.id} className="sidebar__item">
+                  <div>
+                    <p className="sidebar__path">{source.path}</p>
+                    <p className="sidebar__meta">Added {new Date(source.createdAt).toLocaleString()}</p>
+                  </div>
+                  <button type="button" onClick={() => handleScanSource(source.id)} disabled={isScanning}>
+                    Rescan
+                  </button>
+                </li>
+              ))}
+            </ul>
+            {sources.length === 0 && <p className="sidebar__empty">No sources yet.</p>}
+          </div>
           <div className="sidebar__status">
             <h3>Helper Status</h3>
             {pingStatus.ok ? (
