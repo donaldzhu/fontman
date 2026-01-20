@@ -129,7 +129,6 @@ const App = () => {
     Record<number, { key: string; dataUrl: string }>
   >({})
   const [fitScale, setFitScale] = useState(1)
-  const [tileWidth, setTileWidth] = useState<number | null>(null)
   const [facetFilters, setFacetFilters] = useState<
     Record<
       number,
@@ -191,6 +190,57 @@ const App = () => {
     })
   }, [facetColumns])
 
+  const filteredFamilies = useMemo(() => {
+    const normalizedSearch = searchText.trim().toLowerCase()
+    return families.filter((family) => {
+      if (normalizedSearch) {
+        const familyMatch = family.familyName.toLowerCase().includes(normalizedSearch)
+        const faceMatch = family.faces.some((face) =>
+          `${face.fullName} ${face.styleName}`.toLowerCase().includes(normalizedSearch),
+        )
+        if (!familyMatch && !faceMatch) {
+          return false
+        }
+      }
+      for (const column of facetColumns) {
+        const filter = facetFilters[column.id]
+        if (!filter) {
+          continue
+        }
+        if (column.type === 'multi' && filter.type === 'multi') {
+          if (filter.selectedValueIds.length === 0) {
+            continue
+          }
+          const matches = filter.selectedValueIds.some((id) => family.facetValueIds.includes(id))
+          if (!matches) {
+            return false
+          }
+        } else if (column.type === 'single' && filter.type === 'single') {
+          if (filter.selectedValueId == null) {
+            continue
+          }
+          if (!family.facetValueIds.includes(filter.selectedValueId)) {
+            return false
+          }
+        } else if (column.type === 'boolean' && filter.type === 'boolean') {
+          const valueId = column.values[0]?.id
+          if (!valueId || filter.state === 'any') {
+            continue
+          }
+          const hasValue = family.facetValueIds.includes(valueId)
+          if (filter.state === 'yes' && !hasValue) {
+            return false
+          }
+          if (filter.state === 'no' && hasValue) {
+            return false
+          }
+        }
+      }
+      return true
+    })
+  }, [families, facetColumns, facetFilters, searchText])
+
+
   useEffect(() => {
     let timeoutId: number | null = null
     let rafId: number | null = null
@@ -200,54 +250,26 @@ const App = () => {
       const grid = gridRef.current
       if (!container || !grid) {
         setFitScale(1)
-        setTileWidth(null)
         return
       }
 
       const containerRect = container.getBoundingClientRect()
-      const tiles = Array.from(grid.querySelectorAll<HTMLElement>('.family-tile'))
-      let maxTileWidth = 0
+      const previews = Array.from(grid.querySelectorAll<HTMLElement>('.family-tile__preview-text'))
+      let maxRatio = 1
 
-      for (const tile of tiles) {
-        const rect = tile.getBoundingClientRect()
+      for (const preview of previews) {
+        const rect = preview.getBoundingClientRect()
         if (rect.bottom < containerRect.top || rect.top > containerRect.bottom) {
           continue
         }
-        const styles = window.getComputedStyle(tile)
-        const paddingLeft = Number.parseFloat(styles.paddingLeft || '0')
-        const paddingRight = Number.parseFloat(styles.paddingRight || '0')
-        const paddingWidth = paddingLeft + paddingRight
-
-        const header = tile.querySelector<HTMLElement>('.family-tile__header')
-        const footer = tile.querySelector<HTMLElement>('.family-tile__footer')
-        const previewText = tile.querySelector<HTMLElement>('.family-tile__preview-text')
-        const previewContainer = tile.querySelector<HTMLElement>('.family-tile__preview')
-
-        const headerWidth = header?.scrollWidth ?? 0
-        const footerWidth = footer?.scrollWidth ?? 0
-        const previewWidth = previewText?.scrollWidth ?? previewContainer?.scrollWidth ?? 0
-
-        const contentWidth = Math.max(headerWidth, footerWidth, previewWidth) + paddingWidth
-        maxTileWidth = Math.max(maxTileWidth, contentWidth)
+        const clientWidth = preview.clientWidth
+        const scrollWidth = preview.scrollWidth
+        if (clientWidth > 0 && scrollWidth > clientWidth) {
+          maxRatio = Math.max(maxRatio, scrollWidth / clientWidth)
+        }
       }
 
-      if (maxTileWidth === 0) {
-        setFitScale(1)
-        setTileWidth(null)
-        return
-      }
-
-      const availableWidth = grid.clientWidth
-      if (availableWidth === 0) {
-        setFitScale(1)
-        setTileWidth(null)
-        return
-      }
-
-      const nextTileWidth = Math.min(maxTileWidth, availableWidth)
-      const nextScale = maxTileWidth > nextTileWidth ? nextTileWidth / maxTileWidth : 1
-
-      setTileWidth((current) => (current === nextTileWidth ? current : nextTileWidth))
+      const nextScale = maxRatio > 1 ? Math.min(1, 1 / maxRatio) : 1
       setFitScale((current) => (Math.abs(current - nextScale) < 0.01 ? current : nextScale))
     }
 
@@ -513,57 +535,6 @@ const App = () => {
       .join(',')
     return `${faceId}|${fontSize}|${sampleText}|${enabledFeatures.join(',')}|${axisEntries}`
   }
-
-  const filteredFamilies = useMemo(() => {
-    const normalizedSearch = searchText.trim().toLowerCase()
-    return families.filter((family) => {
-      if (normalizedSearch) {
-        const familyMatch = family.familyName.toLowerCase().includes(normalizedSearch)
-        const faceMatch = family.faces.some((face) =>
-          `${face.fullName} ${face.styleName}`.toLowerCase().includes(normalizedSearch),
-        )
-        if (!familyMatch && !faceMatch) {
-          return false
-        }
-      }
-      for (const column of facetColumns) {
-        const filter = facetFilters[column.id]
-        if (!filter) {
-          continue
-        }
-        if (column.type === 'multi' && filter.type === 'multi') {
-          if (filter.selectedValueIds.length === 0) {
-            continue
-          }
-          const matches = filter.selectedValueIds.some((id) => family.facetValueIds.includes(id))
-          if (!matches) {
-            return false
-          }
-        } else if (column.type === 'single' && filter.type === 'single') {
-          if (filter.selectedValueId == null) {
-            continue
-          }
-          if (!family.facetValueIds.includes(filter.selectedValueId)) {
-            return false
-          }
-        } else if (column.type === 'boolean' && filter.type === 'boolean') {
-          const valueId = column.values[0]?.id
-          if (!valueId || filter.state === 'any') {
-            continue
-          }
-          const hasValue = family.facetValueIds.includes(valueId)
-          if (filter.state === 'yes' && !hasValue) {
-            return false
-          }
-          if (filter.state === 'no' && hasValue) {
-            return false
-          }
-        }
-      }
-      return true
-    })
-  }, [families, facetColumns, facetFilters, searchText])
-
 
   useEffect(() => {
     let cancelled = false
@@ -967,11 +938,7 @@ const App = () => {
             </section>
           )}
 
-          <section
-            className="family-grid"
-            ref={gridRef}
-            style={tileWidth ? ({ '--tile-width': `${tileWidth}px` } as React.CSSProperties) : undefined}
-          >
+          <section className="family-grid" ref={gridRef}>
             {filteredFamilies.map((family) => (
               (() => {
                 const representative = representativeFaces.get(family.id)
@@ -986,51 +953,51 @@ const App = () => {
                       ? 'active'
                       : 'partial'
                 return (
-              <div
-                key={family.id}
-                className={`family-tile${selectedFamilyId === family.id ? ' family-tile--selected' : ''}`}
-                onClick={() => setSelectedFamilyId(family.id)}
-                onDoubleClick={() => undefined}
-              >
-                <div className="family-tile__header">
-                  <div>
-                    <p className="family-tile__name">{family.familyName}</p>
-                    <p className="family-tile__meta">{representative.styleName}</p>
-                  </div>
-                  <span className={`family-tile__status family-tile__status--${activationState}`} />
-                </div>
-                {isCollectionFace(representative) && representative.previewSupported ? (
-                  <div className="family-tile__preview family-tile__preview--raster">
-                    {previewRenders[representative.id]?.key ===
-                    buildPreviewKey(representative.id, faceFeatures[representative.id]) ? (
-                      <img
-                        src={previewRenders[representative.id]?.dataUrl}
-                        alt={`${family.familyName} preview`}
-                        className="family-tile__preview-image"
-                      />
-                    ) : (
-                      <span className="family-tile__preview-placeholder">Rendering preview…</span>
-                    )}
-                  </div>
-                ) : (
                   <div
-                    className="family-tile__preview"
-                    style={{
-                      fontFamily: `face_${representative.id}`,
-                      fontSize,
-                      fontFeatureSettings: buildFeatureSettings(representative.id),
-                      fontVariationSettings: buildVariationSettings(representative.id),
-                    }}
+                    key={family.id}
+                    className={`family-tile${selectedFamilyId === family.id ? ' family-tile--selected' : ''}`}
+                    onClick={() => setSelectedFamilyId(family.id)}
+                    onDoubleClick={() => undefined}
                   >
-                    <span className="family-tile__preview-text" style={{ transform: `scale(${fitScale})` }}>
-                      {sampleText}
-                    </span>
+                    <div className="family-tile__header">
+                      <div>
+                        <p className="family-tile__name">{family.familyName}</p>
+                        <p className="family-tile__meta">{representative.styleName}</p>
+                      </div>
+                      <span className={`family-tile__status family-tile__status--${activationState}`} />
+                    </div>
+                    {isCollectionFace(representative) && representative.previewSupported ? (
+                      <div className="family-tile__preview family-tile__preview--raster">
+                        {previewRenders[representative.id]?.key ===
+                          buildPreviewKey(representative.id, faceFeatures[representative.id]) ? (
+                          <img
+                            src={previewRenders[representative.id]?.dataUrl}
+                            alt={`${family.familyName} preview`}
+                            className="family-tile__preview-image"
+                          />
+                        ) : (
+                          <span className="family-tile__preview-placeholder">Rendering preview…</span>
+                        )}
+                      </div>
+                    ) : (
+                      <div
+                        className="family-tile__preview"
+                        style={{
+                          fontFamily: `face_${representative.id}`,
+                          fontSize,
+                          fontFeatureSettings: buildFeatureSettings(representative.id),
+                          fontVariationSettings: buildVariationSettings(representative.id),
+                        }}
+                      >
+                        <span className="family-tile__preview-text" style={{ transform: `scale(${fitScale})` }}>
+                          {sampleText}
+                        </span>
+                      </div>
+                    )}
+                    <div className="family-tile__footer">
+                      <span>{family.faces.length} faces</span>
+                    </div>
                   </div>
-                )}
-                <div className="family-tile__footer">
-                  <span>{family.faces.length} faces</span>
-                </div>
-              </div>
                 )
               })()
             ))}
