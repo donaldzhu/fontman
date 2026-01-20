@@ -1,5 +1,6 @@
 import React, { useMemo, useRef, useState } from 'react'
 import { useTypefaceCellSizing } from '../hooks/useTypefaceCellSizing'
+import { useVisibleFontFaces } from '../hooks/useVisibleFontFaces'
 import FamilyTile, { FamilyGridItem } from './FamilyTile'
 
 type Props = {
@@ -23,6 +24,7 @@ export default function FamilyGrid({ families, sampleText, targetFontSizePx }: P
       textDebounceMs: 90, // typing debounce only
     }
   )
+  const { registerTileEl } = useVisibleFontFaces(families, containerRef)
 
   const selectedFamily = useMemo(() => {
     if (!selected) return null
@@ -44,6 +46,7 @@ export default function FamilyGrid({ families, sampleText, targetFontSizePx }: P
             targetFontSizePx={targetFontSizePx}
             fitScale={sizing.fitScale}
             registerPreviewEl={sizing.registerPreviewEl}
+            registerTileEl={registerTileEl}
             onSelect={setSelected}
           />
         ))}
